@@ -505,7 +505,13 @@ jobs:
       - name: Build & install libsrt from source (ABI-matched to our libstdc++)
         run: |
           SYS=/usr/x86_64-w64-mingw32
-          pacman -S --noconfirm --needed mingw-w64-cmake mingw-w64-openssl
+          # --overwrite: the FEL ffmpeg-from-source build above already drops an
+          # openssl (libcrypto/libssl) into $SYS, so a plain `pacman -S
+          # mingw-w64-openssl` aborts with "conflicting files" on those unowned
+          # files. Let pacman take ownership of them (ABI-compatible openssl 3.x).
+          # (The stable Windows job doesn't hit this: it installs the prebuilt
+          # mingw-w64-ffmpeg, which already owns openssl via its deps.)
+          pacman -S --noconfirm --needed --overwrite '*' mingw-w64-cmake mingw-w64-openssl
           SRT_VER=1.5.5
           curl -sLO "https://github.com/Haivision/srt/archive/refs/tags/v${SRT_VER}.tar.gz"
           tar xzf "v${SRT_VER}.tar.gz"
