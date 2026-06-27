@@ -460,8 +460,13 @@ jobs:
             /usr/x86_64-w64-mingw32/lib/libdovi*
             /usr/x86_64-w64-mingw32/include/libplacebo
             /usr/x86_64-w64-mingw32/include/libav*
+            /usr/x86_64-w64-mingw32/include/libsw*
             /usr/x86_64-w64-mingw32/include/ffnvcodec
-          key: fel-mingw-${{ needs.resolve-dvfel.outputs.sha }}-${{ hashFiles('deps-fel/**', 'scripts/build-fel-deps.sh') }}
+          # v2: previous key cached the libsw* libs + .pc but not their headers
+          # (the include/libav* glob misses libswresample/libswscale), so a cache
+          # hit left mpv unable to find <libswresample/swresample.h>. Bump to
+          # rebuild + recache the prefix with those headers included.
+          key: fel-mingw-v2-${{ needs.resolve-dvfel.outputs.sha }}-${{ hashFiles('deps-fel/**', 'scripts/build-fel-deps.sh') }}
 
       - name: Write meson cross-file (x86_64-w64-mingw32)
         run: |
