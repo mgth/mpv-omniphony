@@ -539,7 +539,14 @@ static void process_spatial(struct mp_filter *da, struct priv *p)
         failed = true;
         goto done;
     }
-    memcpy(data[0], samples, n_frames * (size_t)n_ch * sizeof(float));
+    size_t copy_elems = (size_t)n_frames * (size_t)n_ch;
+    if (n_ch > 0 && copy_elems / (size_t)n_ch != (size_t)n_frames) {
+        MP_ERR(da, "output frame size overflow (%zu frames, %u ch)\n", n_frames, n_ch);
+        TA_FREEP(&out);
+        failed = true;
+        goto done;
+    }
+    memcpy(data[0], samples, copy_elems * sizeof(float));
 
 done:
     talloc_free(samples);
