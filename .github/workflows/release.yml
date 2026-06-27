@@ -562,7 +562,11 @@ jobs:
           # real file, not a dangling link; key the bundle by basename.
           resolve() { python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
 
-          worklist=(staging/mpv staging/liborender.dylib)
+          # MoltenVK is dlopen'd by the Vulkan loader via its ICD, not a link-time
+          # dep, so the recursive walker never sees it — copy it explicitly and
+          # seed the worklist with it so its id/rpath get normalised too.
+          cp "$(brew --prefix molten-vk)/lib/libMoltenVK.dylib" staging/
+          worklist=(staging/mpv staging/liborender.dylib staging/libMoltenVK.dylib)
           while [ ${#worklist[@]} -gt 0 ]; do
             obj="${worklist[0]}"; worklist=("${worklist[@]:1}")
             echo "scanning $obj"
@@ -593,11 +597,15 @@ jobs:
           install_name_tool -add_rpath @loader_path staging/mpv 2>/dev/null || true
           install_name_tool -add_rpath @executable_path staging/mpv 2>/dev/null || true
 
-          # Bundle the MoltenVK ICD so --gpu-api=vulkan works without a system
-          # Vulkan install; point the loader at it via a relative path at runtime.
+          # MoltenVK ICD so --gpu-api=vulkan works without a system Vulkan install;
+          # rewrite library_path to the bundled dylib. Homebrew installs the ICD
+          # under etc/ (not share/) and the path has drifted before, so locate it
+          # with find rather than hardcoding.
           mkdir -p staging/share/vulkan/icd.d
-          cp "$(brew --prefix molten-vk)/share/vulkan/icd.d/MoltenVK_icd.json" \
-            staging/share/vulkan/icd.d/
+          icd_src=$(find -L "$(brew --prefix molten-vk)" -name MoltenVK_icd.json 2>/dev/null | head -1)
+          test -n "$icd_src" || { echo "!! MoltenVK_icd.json not found under molten-vk prefix" >&2; exit 1; }
+          sed 's#"library_path"[[:space:]]*:[[:space:]]*"[^"]*"#"library_path": "../../../libMoltenVK.dylib"#' \
+            "$icd_src" > staging/share/vulkan/icd.d/MoltenVK_icd.json
 
           # Gate: nothing must still link an absolute brew/local path.
           leak=$(for f in staging/mpv staging/*.dylib; do
