@@ -39,7 +39,8 @@ jobs:
             meson ninja-build pkg-config gcc \
             libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libswscale-dev \
             libass-dev libplacebo-dev liblua5.2-dev libx11-dev \
-            libva-dev libdrm-dev libegl-dev libgl-dev
+            libva-dev libdrm-dev libegl-dev libgl-dev \
+            libbluray-dev libdvdnav-dev libdvdread-dev
 
       - name: Checkout Omniphony (renderer source)
         uses: actions/checkout@v4
@@ -103,9 +104,14 @@ jobs:
           # vaapi: AMD/Intel hardware decoding (VA-API) — apt's ffmpeg already
           # carries vaapi, so libva-dev/libdrm-dev above is all mpv needs.
           # (No -Dvulkan hwdec here: it needs ffmpeg >= 7.0 and apt ships 6.x.)
+          # libbluray/dvdnav: BD/DVD/ISO playback. Forced on (not auto) so the
+          # build FAILS LOUDLY if the dep is missing rather than silently
+          # shipping a release without disc support. (dvdnav pulls libdvdread;
+          # there is no separate mpv 'dvdread' option.)
           meson setup _b -Dorender=enabled \
             -Dcuda-hwaccel=enabled -Dcuda-interop=enabled \
-            -Dvaapi=auto
+            -Dvaapi=auto \
+            -Dlibbluray=enabled -Ddvdnav=enabled
           meson compile -C _b
 
       - name: Package (zip)
@@ -191,7 +197,14 @@ jobs:
             mingw-w64-ffmpeg \
             mingw-w64-libplacebo \
             mingw-w64-libass \
-            mingw-w64-spirv-cross
+            mingw-w64-spirv-cross \
+            mingw-w64-libdvdnav mingw-w64-libdvdread
+          # ^ DVD playback (folders + ISO), from the Martchus 'ownstuff' repo
+          # configured above (libdvdnav 6.1.1 -> libdvdread 6.1.3; they read disc
+          # images natively). libbluray is deliberately NOT taken from Martchus:
+          # its prebuilt is compiled without libudfread (BD folders only), so we
+          # build it from source with the embedded udfread in a later step for
+          # BD-ISO support. The recursive DLL walker in packaging bundles them.
 
       - name: Build & install libsrt from source (ABI-matched to our libstdc++)
         run: |
@@ -339,6 +352,14 @@ jobs:
           endian = 'little'
           EOF
 
+      - name: Build & install libbluray with BD-ISO (libudfread) support
+        run: |
+          # Martchus ships libbluray without libudfread (BD folders only). Build
+          # it from source with the vendored udfread embedded so raw BD ISOs
+          # open; installs over the MinGW sysroot the mpv build below links to.
+          CROSS_FILE="$GITHUB_WORKSPACE/sysroot/mingw-cross.ini" \
+            bash scripts/build-libbluray-mingw.sh
+
       - name: Cross-compile mpv (MinGW)
         run: |
           # The cross-file uses x86_64-w64-mingw32-pkg-config (Martchus wrapper),
@@ -359,7 +380,8 @@ jobs:
             -Dlua=lua52 \
             -Dasio=enabled \
             -Dd3d11=enabled \
-            -Dcuda-hwaccel=enabled
+            -Dcuda-hwaccel=enabled \
+            -Dlibbluray=enabled -Ddvdnav=enabled
           meson compile -C _b
 
       - name: Package (zip)
@@ -443,8 +465,10 @@ jobs:
           # libplacebo's gpu-next path needs on Apple Silicon (there is no native
           # Vulkan driver on macOS). They are bundled into the artifact below so
           # the build renders on a clean Mac without a system-wide Vulkan install.
+          # libbluray/libdvdnav add BD/DVD/ISO playback (also bundled below).
           brew install meson ninja pkg-config ffmpeg libass libplacebo luajit \
-            molten-vk vulkan-loader vulkan-headers
+            molten-vk vulkan-loader vulkan-headers \
+            libbluray libdvdnav libdvdread
 
       - name: Checkout Omniphony (renderer source)
         uses: actions/checkout@v4
@@ -495,7 +519,11 @@ jobs:
           # liborender and the brew-installed ffmpeg/libass/libplacebo/luajit.
           export PKG_CONFIG_PATH="${{ github.workspace }}/sysroot/usr/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
           cd "build/mpv-${MPV_TAG}"
-          meson setup _b -Dorender=enabled
+          # Disc playback (BD/DVD/ISO) via the brew libbluray/libdvdnav installed
+          # above. brew's libbluray pulls libudfread, so raw BD-ISO works too;
+          # the recursive dylib worklist in the packaging step bundles them all
+          # into the self-contained zip (no runtime brew dependency).
+          meson setup _b -Dorender=enabled -Dlibbluray=enabled -Ddvdnav=enabled
           meson compile -C _b
 
       - name: Package (zip)
