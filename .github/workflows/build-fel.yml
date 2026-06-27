@@ -59,7 +59,8 @@ jobs:
             meson ninja-build pkg-config gcc nasm git patchelf zlib1g-dev \
             libass-dev liblua5.2-dev libx11-dev \
             libvulkan-dev libshaderc-dev glslang-dev liblcms2-dev \
-            libva-dev libdrm-dev
+            libva-dev libdrm-dev \
+            libbluray-dev libdvdnav-dev libdvdread-dev
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -141,7 +142,8 @@ jobs:
           #   vulkan                -> Vulkan video decode (ffmpeg 8.1, vendor-neutral)
           meson setup _b -Dorender=enabled \
             -Dcuda-hwaccel=enabled -Dcuda-interop=enabled \
-            -Dvaapi=auto -Dvulkan=enabled
+            -Dvaapi=auto -Dvulkan=enabled \
+            -Dlibbluray=enabled -Ddvdnav=enabled
           meson compile -C _b
           echo "== mpv libplacebo linkage =="
           ldd _b/mpv | grep -E 'libplacebo|libavcodec' || true
@@ -192,7 +194,8 @@ jobs:
           # libdovi (so build-fel-deps.sh skips its own `cargo install cargo-c`).
           brew install meson ninja pkg-config cargo-c \
             libass luajit lcms2 shaderc glslang \
-            molten-vk vulkan-headers vulkan-loader
+            molten-vk vulkan-headers vulkan-loader \
+            libbluray libdvdnav libdvdread
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -268,7 +271,10 @@ jobs:
           export PATH="$PREFIX/bin:$PATH"
           cd "$MPV_DIR"
           # No CUDA/VA-API on macOS; Vulkan -> MoltenVK is the gpu-next path.
-          meson setup _b -Dorender=enabled -Dvulkan=enabled
+          # libbluray/dvdnav (BD/DVD/ISO) from brew; the recursive dylib bundler
+          # in the packaging step picks them up into the self-contained zip.
+          meson setup _b -Dorender=enabled -Dvulkan=enabled \
+            -Dlibbluray=enabled -Ddvdnav=enabled
           meson compile -C _b
           echo "== mpv libplacebo linkage =="
           otool -L _b/mpv | grep -E 'libplacebo|libavcodec' || true
@@ -409,7 +415,12 @@ jobs:
             mingw-w64-meson \
             mingw-w64-libass \
             mingw-w64-vulkan-headers mingw-w64-vulkan-icd-loader \
-            mingw-w64-shaderc mingw-w64-spirv-cross mingw-w64-lcms2 mingw-w64-zlib
+            mingw-w64-shaderc mingw-w64-spirv-cross mingw-w64-lcms2 mingw-w64-zlib \
+            mingw-w64-libdvdnav mingw-w64-libdvdread
+          # ^ DVD playback (folder + ISO) from Martchus; libdvdnav -> libdvdread
+          # read images natively. libbluray is built from source with embedded
+          # libudfread in a later step (Martchus's lacks udfread = BD folders
+          # only); the DLL-walker in packaging bundles them all.
           # We build our OWN libplacebo (dv-fel) + ffmpeg (dovi_split) into the
           # MinGW sysroot below, so we intentionally do NOT install
           # mingw-w64-libplacebo / mingw-w64-ffmpeg here.
@@ -527,6 +538,15 @@ jobs:
           Cflags: -I\${includedir}
           EOF
 
+      - name: Build & install libbluray with BD-ISO (libudfread) support
+        run: |
+          # Martchus ships libbluray without libudfread (BD folders only). Build
+          # it from source with the vendored udfread embedded so raw BD ISOs
+          # open; installs over the MinGW sysroot the mpv build below links to.
+          # The cross-file was written above (Write meson cross-file step).
+          CROSS_FILE="$GITHUB_WORKSPACE/sysroot/mingw-cross.ini" \
+            bash scripts/build-libbluray-mingw.sh
+
       - name: Download liborender (built from source)
         uses: actions/download-artifact@v4
         with:
@@ -565,7 +585,8 @@ jobs:
           # cuda-interop left at auto for the MinGW GL/D3D interop path.
           meson setup _b \
             --cross-file="$GITHUB_WORKSPACE/sysroot/mingw-cross.ini" \
-            -Dorender=enabled -Dlua=lua52 -Dasio=enabled -Dd3d11=enabled -Dcuda-hwaccel=enabled
+            -Dorender=enabled -Dlua=lua52 -Dasio=enabled -Dd3d11=enabled -Dcuda-hwaccel=enabled \
+            -Dlibbluray=enabled -Ddvdnav=enabled
           meson compile -C _b
 
       - name: Package (zip, DLL-walker bundles FEL DLLs from sysroot)
