@@ -32,7 +32,8 @@ jobs:
           sudo apt-get install -y \
             meson ninja-build pkg-config gcc \
             libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libswscale-dev \
-            libass-dev libplacebo-dev liblua5.2-dev libx11-dev
+            libass-dev libplacebo-dev liblua5.2-dev libx11-dev \
+            libbluray-dev libdvdnav-dev libdvdread-dev
 
       - name: Checkout Omniphony (renderer source)
         uses: actions/checkout@v4
@@ -77,7 +78,7 @@ jobs:
           export PKG_CONFIG_PATH="${{ github.workspace }}/sysroot/usr/lib/pkgconfig"
           export LD_LIBRARY_PATH="${{ github.workspace }}/sysroot/usr/lib"
           cd "build/mpv-${MPV_TAG}"
-          meson setup _b -Dorender=enabled
+          meson setup _b -Dorender=enabled -Dlibbluray=enabled -Ddvdnav=enabled
           meson compile -C _b
 
       - name: Package (zip)
@@ -153,7 +154,10 @@ jobs:
             mingw-w64-meson \
             mingw-w64-ffmpeg \
             mingw-w64-libplacebo \
-            mingw-w64-libass
+            mingw-w64-libass \
+            mingw-w64-libdvdnav mingw-w64-libdvdread
+          # ^ DVD (folder + ISO) from Martchus; libbluray is built from source
+          # with embedded libudfread in a later step (BD-ISO), mirroring release.yml.
 
       - name: Build & install libsrt from source (ABI-matched to our libstdc++)
         run: |
@@ -260,6 +264,14 @@ jobs:
           endian = 'little'
           EOF
 
+      - name: Build & install libbluray with BD-ISO (libudfread) support
+        run: |
+          # Martchus ships libbluray without libudfread (BD folders only). Build
+          # it from source with the vendored udfread embedded so raw BD ISOs
+          # open; installs over the MinGW sysroot the mpv build below links to.
+          CROSS_FILE="$GITHUB_WORKSPACE/sysroot/mingw-cross.ini" \
+            bash scripts/build-libbluray-mingw.sh
+
       - name: Cross-compile mpv (MinGW)
         run: |
           cd "build/mpv-${MPV_TAG}"
@@ -267,7 +279,8 @@ jobs:
             --cross-file="$GITHUB_WORKSPACE/sysroot/mingw-cross.ini" \
             -Dorender=enabled \
             -Dlua=lua52 \
-            -Dasio=enabled
+            -Dasio=enabled \
+            -Dlibbluray=enabled -Ddvdnav=enabled
           meson compile -C _b
 
       - name: Package (zip)
@@ -322,8 +335,162 @@ jobs:
           name: mpv-omniphony-windows-x86_64
           path: mpv-omniphony-integration-windows-x86_64.zip
 
+  # macOS (Apple Silicon): mirrors release.yml's build-macos (self-contained
+  # binary zip, disc playback included). The release-grade .app bundle is
+  # intentionally omitted here — integration ships bare binary zips like the
+  # Linux/Windows jobs. OMNIPHONY_REF=main (env) tracks the integration branch.
+  build-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mpv build deps (Homebrew)
+        run: |
+          brew update
+          # molten-vk + vulkan-loader provide the Vulkan-on-Metal runtime that
+          # libplacebo's gpu-next path needs on Apple Silicon (there is no native
+          # Vulkan driver on macOS). They are bundled into the artifact below so
+          # the build renders on a clean Mac without a system-wide Vulkan install.
+          # libbluray/libdvdnav add BD/DVD/ISO playback (also bundled below).
+          brew install meson ninja pkg-config ffmpeg libass libplacebo luajit \
+            molten-vk vulkan-loader vulkan-headers \
+            libbluray libdvdnav libdvdread
+
+      - name: Checkout Omniphony (renderer source)
+        uses: actions/checkout@v4
+        with:
+          repository: mgth/Omniphony
+          ref: ${{ env.OMNIPHONY_REF }}
+          path: omniphony
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build liborender from source
+        run: cargo build --release -p orender_ffi
+        working-directory: omniphony/omniphony-renderer
+        env:
+          RUSTFLAGS: -D warnings
+
+      - name: Install liborender into sysroot
+        run: |
+          mkdir -p sysroot/usr/lib sysroot/usr/include sysroot/usr/lib/pkgconfig
+          rel=omniphony/omniphony-renderer/target/release
+          # No soname symlink needed on macOS; the release dylib already carries
+          # an `@rpath/liborender.dylib` install name (orender_ffi/build.rs).
+          cp "$rel/liborender.dylib" sysroot/usr/lib/liborender.dylib
+          cp omniphony/omniphony-renderer/orender_ffi/include/orender.h sysroot/usr/include/orender.h
+          # Hand-write a minimal pkg-config so mpv's meson finds liborender.
+          cat > sysroot/usr/lib/pkgconfig/orender.pc <<EOF
+          prefix=${{ github.workspace }}/sysroot/usr
+          libdir=\${prefix}/lib
+          includedir=\${prefix}/include
+
+          Name: orender
+          Description: Omniphony renderer C library
+          Version: 0.99.0
+          Libs: -L\${libdir} -lorender
+          Cflags: -I\${includedir}
+          EOF
+
+      - name: Apply patches onto mpv
+        run: bash scripts/apply-patches.sh "$MPV_TAG"
+
+      - name: Build mpv with ad_orender
+        run: |
+          # Prepend our sysroot, then Homebrew's pkgconfig so meson finds both
+          # liborender and the brew-installed ffmpeg/libass/libplacebo/luajit.
+          export PKG_CONFIG_PATH="${{ github.workspace }}/sysroot/usr/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+          cd "build/mpv-${MPV_TAG}"
+          # Disc playback (BD/DVD/ISO); brew's libbluray pulls libudfread so raw
+          # BD-ISO works. The recursive dylib worklist below bundles them all.
+          meson setup _b -Dorender=enabled -Dlibbluray=enabled -Ddvdnav=enabled
+          meson compile -C _b
+
+      - name: Package (zip)
+        # Self-contained bundle: copy every non-system dylib mpv depends on next
+        # to the binary and rewrite references to @rpath. macOS analogue of the
+        # Windows recursive DLL worklist above.
+        run: |
+          mkdir -p staging
+          cp "build/mpv-${MPV_TAG}/_b/mpv" staging/
+          cp sysroot/usr/lib/liborender.dylib staging/
+          cp sysroot/usr/include/orender.h staging/
+          cp README.md staging/
+
+          # liborender first: normalise its id and repoint mpv's reference, so the
+          # recursive pass below treats it as already-bundled.
+          install_name_tool -id @rpath/liborender.dylib staging/liborender.dylib
+          old_ref=$(otool -L staging/mpv | awk '/liborender\.dylib/ {print $1; exit}')
+          if [ -n "$old_ref" ] && [ "$old_ref" != "@rpath/liborender.dylib" ]; then
+            install_name_tool -change "$old_ref" @rpath/liborender.dylib staging/mpv
+          fi
+
+          # OS-provided libs we must NOT bundle; everything else (brew, /usr/local,
+          # a Cellar path) is copied. Already-@-relative refs are skipped.
+          is_system() {
+            case "$1" in
+              /usr/lib/*|/System/*|@*) return 0 ;;
+            esac
+            return 1
+          }
+          resolve() { python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
+
+          worklist=(staging/mpv staging/liborender.dylib)
+          while [ ${#worklist[@]} -gt 0 ]; do
+            obj="${worklist[0]}"; worklist=("${worklist[@]:1}")
+            echo "scanning $obj"
+            while read -r ref; do
+              is_system "$ref" && continue
+              base=$(basename "$ref")
+              if [ ! -f "staging/$base" ]; then
+                real=$(resolve "$ref")
+                if [ -f "$real" ]; then
+                  cp "$real" "staging/$base"
+                  chmod u+w "staging/$base"
+                  install_name_tool -id "@rpath/$base" "staging/$base"
+                  worklist+=("staging/$base")
+                  echo "  + $base"
+                else
+                  echo "  ! NOT FOUND: $ref"
+                fi
+              fi
+              install_name_tool -change "$ref" "@rpath/$base" "$obj" 2>/dev/null || true
+            done < <(otool -L "$obj" | awk 'NR>1 {print $1}')
+          done
+
+          for f in staging/*.dylib; do
+            install_name_tool -add_rpath @loader_path "$f" 2>/dev/null || true
+          done
+          install_name_tool -add_rpath @loader_path staging/mpv 2>/dev/null || true
+          install_name_tool -add_rpath @executable_path staging/mpv 2>/dev/null || true
+
+          # Bundle the MoltenVK ICD so --gpu-api=vulkan works without a system
+          # Vulkan install; point the loader at it via a relative path at runtime.
+          mkdir -p staging/share/vulkan/icd.d
+          cp "$(brew --prefix molten-vk)/share/vulkan/icd.d/MoltenVK_icd.json" \
+            staging/share/vulkan/icd.d/
+
+          # Gate: nothing must still link an absolute brew/local path.
+          leak=$(for f in staging/mpv staging/*.dylib; do
+                   otool -L "$f" | awk 'NR>1 {print $1}'
+                 done | grep -E '^/(opt/homebrew|usr/local)' | sort -u || true)
+          if [ -n "$leak" ]; then
+            echo "!! un-bundled absolute references remain:" >&2
+            echo "$leak" >&2
+            exit 1
+          fi
+
+          cd staging
+          zip -r "../mpv-omniphony-integration-macos-arm64.zip" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mpv-omniphony-macos-arm64
+          path: mpv-omniphony-integration-macos-arm64.zip
+
   publish-integration:
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-windows, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -335,6 +502,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: mpv-omniphony-windows-x86_64
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: mpv-omniphony-macos-arm64
 
       # Reset the rolling release + tag so assets are replaced, not accumulated.
       - name: Delete previous integration release + tag (if any)
@@ -360,3 +531,4 @@ jobs:
           files: |
             mpv-omniphony-integration-linux-x86_64.zip
             mpv-omniphony-integration-windows-x86_64.zip
+            mpv-omniphony-integration-macos-arm64.zip
