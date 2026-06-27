@@ -294,8 +294,12 @@ jobs:
           cp README.md staging/
           # MoltenVK is dlopen'd by the Vulkan loader via its ICD (not a link-time
           # dep), so copy it explicitly; libvulkan itself is pulled in below as a
-          # dep of libplacebo by the walker.
+          # dep of libplacebo by the walker. Normalise its id to @rpath (its brew
+          # install id is an absolute path the leak gate rejects; the worklist
+          # only rewrites a seed's dependencies, never its own id).
           cp "$(brew --prefix molten-vk)/lib/libMoltenVK.dylib" staging/
+          chmod u+w staging/libMoltenVK.dylib
+          install_name_tool -id @rpath/libMoltenVK.dylib staging/libMoltenVK.dylib
 
           # liborender first (older OMNIPHONY_REFs lack the @rpath id).
           install_name_tool -id @rpath/liborender.dylib staging/liborender.dylib
