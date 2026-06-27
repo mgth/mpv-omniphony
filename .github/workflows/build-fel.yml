@@ -335,10 +335,13 @@ jobs:
 
           # MoltenVK ICD pointing at the bundled driver (relative to the json dir).
           # Users export VK_ICD_FILENAMES to this file (documented in the release).
+          # Homebrew installs the ICD under etc/ (not share/) and the path has
+          # drifted before, so locate it with find rather than hardcoding.
           mkdir -p staging/share/vulkan/icd.d
+          icd_src=$(find -L "$(brew --prefix molten-vk)" -name MoltenVK_icd.json 2>/dev/null | head -1)
+          test -n "$icd_src" || { echo "!! MoltenVK_icd.json not found under molten-vk prefix" >&2; exit 1; }
           sed 's#"library_path"[[:space:]]*:[[:space:]]*"[^"]*"#"library_path": "../../../libMoltenVK.dylib"#' \
-            "$(brew --prefix molten-vk)/share/vulkan/icd.d/MoltenVK_icd.json" \
-            > staging/share/vulkan/icd.d/MoltenVK_icd.json
+            "$icd_src" > staging/share/vulkan/icd.d/MoltenVK_icd.json
 
           # Gate: nothing must still link an absolute brew/local path.
           leak=$(for f in staging/mpv staging/*.dylib; do
