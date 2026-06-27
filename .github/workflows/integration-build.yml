@@ -438,8 +438,13 @@ jobs:
 
           # MoltenVK is dlopen'd by the Vulkan loader via its ICD, not a link-time
           # dep, so the recursive walker never sees it — copy it explicitly and
-          # seed the worklist with it so its id/rpath get normalised too.
+          # seed the worklist with it. Its brew install id is an absolute path
+          # (otool -L line 2), which the leak gate rejects, so normalise it to
+          # @rpath up front like liborender (the worklist only rewrites a seed's
+          # dependencies, never its own id).
           cp "$(brew --prefix molten-vk)/lib/libMoltenVK.dylib" staging/
+          chmod u+w staging/libMoltenVK.dylib
+          install_name_tool -id @rpath/libMoltenVK.dylib staging/libMoltenVK.dylib
           worklist=(staging/mpv staging/liborender.dylib staging/libMoltenVK.dylib)
           while [ ${#worklist[@]} -gt 0 ]; do
             obj="${worklist[0]}"; worklist=("${worklist[@]:1}")
