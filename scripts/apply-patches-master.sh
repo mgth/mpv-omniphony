@@ -16,15 +16,24 @@ CLONE_DIR="$WORKDIR/mpv-master-clone"
 
 mkdir -p "$WORKDIR"
 
+# MPV_MASTER_REF pins which master commit we build:
+#   unset / "master"  -> latest master HEAD (default; used by build-master.yml)
+#   a commit SHA       -> that exact commit (used by the FEL flow, whose vendored
+#                         patch targets dv-fel's rebase base — ~100 commits behind
+#                         HEAD. Cloning HEAD rots the FEL patch in vo_gpu_next.c.)
+# The SHA must be an ancestor of master; a full clone always contains it.
+MPV_REF="${MPV_MASTER_REF:-master}"
 if [ ! -d "$CLONE_DIR/.git" ]; then
     echo ">> cloning mpv master (full history, --3way needs blobs)"
     git clone --branch master "$MPV_URL" "$CLONE_DIR"
 else
     echo ">> refreshing existing clone at $CLONE_DIR"
     git -C "$CLONE_DIR" fetch origin master
-    git -C "$CLONE_DIR" reset --hard origin/master
-    git -C "$CLONE_DIR" clean -fdx
 fi
+if [ "$MPV_REF" = master ]; then RESET_TO="origin/master"; else RESET_TO="$MPV_REF"; fi
+echo ">> pinning mpv tree to: $MPV_REF"
+git -C "$CLONE_DIR" reset --hard "$RESET_TO"
+git -C "$CLONE_DIR" clean -fdx
 
 SHORT_SHA="$(git -C "$CLONE_DIR" rev-parse --short HEAD)"
 SRC="$WORKDIR/mpv-master-${SHORT_SHA}"

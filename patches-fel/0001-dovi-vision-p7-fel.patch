@@ -1,12 +1,12 @@
 diff --git a/DOCS/interface-changes/el.txt b/DOCS/interface-changes/el.txt
 new file mode 100644
-index 0000000000..1486ba6971
+index 0000000000000..1486ba69713db
 --- /dev/null
 +++ b/DOCS/interface-changes/el.txt
 @@ -0,0 +1 @@
 +add `vf=format=enhancement-layer` option
 diff --git a/DOCS/man/vf.rst b/DOCS/man/vf.rst
-index 3e4d9c7b2e..f0620ca905 100644
+index 3e4d9c7b2ea71..f0620ca905d23 100644
 --- a/DOCS/man/vf.rst
 +++ b/DOCS/man/vf.rst
 @@ -323,6 +323,12 @@ Available mpv-only filters are:
@@ -23,7 +23,7 @@ index 3e4d9c7b2e..f0620ca905 100644
          Set the minimum luminance value for the mastering display metadata.
          This is a float value in nits (cd/m²).
 diff --git a/demux/demux.c b/demux/demux.c
-index 69008829c4..20d2739d97 100644
+index 69008829c4c49..20d2739d97b7b 100644
 --- a/demux/demux.c
 +++ b/demux/demux.c
 @@ -4145,11 +4145,11 @@ void demuxer_select_track(struct demuxer *demuxer, struct sh_stream *stream,
@@ -41,7 +41,7 @@ index 69008829c4..20d2739d97 100644
          }
      }
 diff --git a/demux/demux_disc.c b/demux/demux_disc.c
-index 377663c11a..87048342ed 100644
+index 377663c11a2f6..87048342edd33 100644
 --- a/demux/demux_disc.c
 +++ b/demux/demux_disc.c
 @@ -123,8 +123,9 @@ static void add_dvd_streams(demuxer_t *demuxer)
@@ -96,7 +96,7 @@ index 377663c11a..87048342ed 100644
  }
  
 diff --git a/demux/demux_lavf.c b/demux/demux_lavf.c
-index c8f134c47c..da884b889e 100644
+index c8f134c47cae1..da884b889e13c 100644
 --- a/demux/demux_lavf.c
 +++ b/demux/demux_lavf.c
 @@ -52,6 +52,7 @@
@@ -319,7 +319,7 @@ index c8f134c47c..da884b889e 100644
              free_stream(priv->stream);
          if (priv->av_opts)
 diff --git a/demux/demux_mkv.c b/demux/demux_mkv.c
-index acbd75f6d9..0349cb91ac 100644
+index acbd75f6d929f..0349cb91ac4ed 100644
 --- a/demux/demux_mkv.c
 +++ b/demux/demux_mkv.c
 @@ -55,6 +55,7 @@
@@ -499,10 +499,10 @@ index acbd75f6d9..0349cb91ac 100644
      current_pts = tc / 1e9 - track->codec_delay;
 diff --git a/demux/dovi_split.c b/demux/dovi_split.c
 new file mode 100644
-index 0000000000..4518f026c5
+index 0000000000000..2476fde7101b1
 --- /dev/null
 +++ b/demux/dovi_split.c
-@@ -0,0 +1,216 @@
+@@ -0,0 +1,203 @@
 +/*
 + * This file is part of mpv.
 + *
@@ -521,7 +521,6 @@ index 0000000000..4518f026c5
 + */
 +
 +#include <string.h>
-+#include <stdlib.h>
 +
 +#include <libavcodec/avcodec.h>
 +#include <libavcodec/bsf.h>
@@ -559,10 +558,6 @@ index 0000000000..4518f026c5
 +{
 +    if (!bl || bl->type != STREAM_VIDEO || !bl->codec ||
 +        !bl->codec->codec || strcmp(bl->codec->codec, "hevc") != 0)
-+        return NULL;
-+
-+    // Debug escape hatch: disable FEL reconstruction (base layer only).
-+    if (getenv("MPV_NO_FEL"))
 +        return NULL;
 +
 +    const AVBitStreamFilter *def = av_bsf_get_by_name("dovi_split");
@@ -608,18 +603,10 @@ index 0000000000..4518f026c5
 +    el->codec->fps = bl->codec->fps;
 +    el->codec->disp_w = par_out->width;
 +    el->codec->disp_h = par_out->height;
-+    // The BSF emits Annex-B, but par_out->extradata may still be the BL's
-+    // hvcC record (length-prefixed). Feeding hvcC extradata to a decoder that
-+    // receives Annex-B packets makes it parse NAL length fields out of start
-+    // codes ("Invalid NAL unit size"). Only forward Annex-B extradata; for
-+    // hvcC, drop it and let the decoder pick up the EL's in-band parameter sets.
-+    const uint8_t *ed = par_out->extradata;
-+    int eds = par_out->extradata_size;
-+    bool ed_annexb = eds >= 4 && ed[0] == 0 && ed[1] == 0 &&
-+                     (ed[2] == 1 || (ed[2] == 0 && ed[3] == 1));
-+    if (eds > 0 && ed_annexb) {
-+        el->codec->extradata = talloc_memdup(el, par_out->extradata, eds);
-+        el->codec->extradata_size = eds;
++    if (par_out->extradata_size > 0) {
++        el->codec->extradata = talloc_memdup(el, par_out->extradata,
++                                             par_out->extradata_size);
++        el->codec->extradata_size = par_out->extradata_size;
 +    }
 +    for (int i = 0; i < par_out->nb_coded_side_data; i++) {
 +        const AVPacketSideData *sd = &par_out->coded_side_data[i];
@@ -721,7 +708,7 @@ index 0000000000..4518f026c5
 +}
 diff --git a/demux/dovi_split.h b/demux/dovi_split.h
 new file mode 100644
-index 0000000000..cf22ded237
+index 0000000000000..cf22ded2378da
 --- /dev/null
 +++ b/demux/dovi_split.h
 @@ -0,0 +1,51 @@
@@ -777,7 +764,7 @@ index 0000000000..cf22ded237
 +struct demux_packet *mp_dovi_split_dispatch(struct mp_dovi_split *s,
 +                                            struct demux_packet *bl_dp);
 diff --git a/demux/stheader.h b/demux/stheader.h
-index 6722c07218..01754746b2 100644
+index 6722c07218673..01754746b2372 100644
 --- a/demux/stheader.h
 +++ b/demux/stheader.h
 @@ -99,6 +99,23 @@ static inline bool sh_stream_has_program(const struct sh_stream *sh, int program
@@ -813,7 +800,7 @@ index 6722c07218..01754746b2 100644
      // STREAM_VIDEO + STREAM_AUDIO
      int bits_per_coded_sample;
 diff --git a/filters/f_decoder_wrapper.c b/filters/f_decoder_wrapper.c
-index 08978e49f4..2137b4b0d2 100644
+index 08978e49f4540..2137b4b0d2152 100644
 --- a/filters/f_decoder_wrapper.c
 +++ b/filters/f_decoder_wrapper.c
 @@ -1406,13 +1406,14 @@ struct mp_decoder_wrapper *mp_decoder_wrapper_create(struct mp_filter *parent,
@@ -847,7 +834,7 @@ index 08978e49f4..2137b4b0d2 100644
      return &p->public;
 diff --git a/filters/f_enhancement_pair.c b/filters/f_enhancement_pair.c
 new file mode 100644
-index 0000000000..18cea54466
+index 0000000000000..18cea54466b33
 --- /dev/null
 +++ b/filters/f_enhancement_pair.c
 @@ -0,0 +1,226 @@
@@ -1079,7 +1066,7 @@ index 0000000000..18cea54466
 +}
 diff --git a/filters/f_enhancement_pair.h b/filters/f_enhancement_pair.h
 new file mode 100644
-index 0000000000..dc00e7ca14
+index 0000000000000..dc00e7ca14094
 --- /dev/null
 +++ b/filters/f_enhancement_pair.h
 @@ -0,0 +1,38 @@
@@ -1122,7 +1109,7 @@ index 0000000000..dc00e7ca14
 +struct mp_filter *mp_enhancement_pair_create(struct mp_filter *parent,
 +                                             struct sh_stream *el_sh);
 diff --git a/filters/f_output_chain.c b/filters/f_output_chain.c
-index 8ded23177d..e512f613c8 100644
+index 8ded23177da84..e512f613c804d 100644
 --- a/filters/f_output_chain.c
 +++ b/filters/f_output_chain.c
 @@ -1,6 +1,7 @@
@@ -1200,7 +1187,7 @@ index 8ded23177d..e512f613c8 100644
  {
      struct chain *p = c->f->priv;
 diff --git a/filters/f_output_chain.h b/filters/f_output_chain.h
-index f313f9a65f..a9c0227783 100644
+index f313f9a65f738..a9c0227783eb8 100644
 --- a/filters/f_output_chain.h
 +++ b/filters/f_output_chain.h
 @@ -88,3 +88,9 @@ double mp_output_get_measured_total_delay(struct mp_output_chain *p);
@@ -1214,7 +1201,7 @@ index f313f9a65f..a9c0227783 100644
 +void mp_output_chain_set_el_stream(struct mp_output_chain *p,
 +                                   struct sh_stream *el_sh);
 diff --git a/meson.build b/meson.build
-index 1cd2570f0d..038b1fa841 100644
+index 1cd2570f0d7ef..038b1fa841ad0 100644
 --- a/meson.build
 +++ b/meson.build
 @@ -106,6 +106,7 @@ sources = files(
@@ -1234,7 +1221,7 @@ index 1cd2570f0d..038b1fa841 100644
      'filters/f_lavfi.c',
      'filters/f_output_chain.c',
 diff --git a/player/core.h b/player/core.h
-index f17a8a9a32..ec6784411c 100644
+index f17a8a9a3294f..ec6784411c969 100644
 --- a/player/core.h
 +++ b/player/core.h
 @@ -568,6 +568,7 @@ struct track *select_default_track(struct MPContext *mpctx, int order,
@@ -1246,10 +1233,10 @@ index f17a8a9a32..ec6784411c 100644
  // main.c
  int mp_initialize(struct MPContext *mpctx, char **argv);
 diff --git a/player/loadfile.c b/player/loadfile.c
-index 0b3e70d550..0db9db5fff 100644
+index 0b3e70d550d59..0db9db5fff09b 100644
 --- a/player/loadfile.c
 +++ b/player/loadfile.c
-@@ -1576,8 +1576,12 @@ done:
+@@ -1576,8 +1576,12 @@ static int reinit_complex_filters(struct MPContext *mpctx, bool force_uninit)
      cleanup_deassociated_complex_filters(mpctx);
  
      if (mpctx->playback_initialized) {
@@ -1264,7 +1251,7 @@ index 0b3e70d550..0db9db5fff 100644
      }
  
      mp_notify(mpctx, MP_EVENT_TRACKS_CHANGED, NULL);
-@@ -1585,11 +1589,25 @@ done:
+@@ -1585,11 +1589,25 @@ static int reinit_complex_filters(struct MPContext *mpctx, bool force_uninit)
      return success ? 1 : -1;
  }
  
@@ -1325,7 +1312,7 @@ index 0b3e70d550..0db9db5fff 100644
      if (mpctx->encode_lavc_ctx) {
          if (mpctx->vo_chain)
 diff --git a/player/video.c b/player/video.c
-index 820bbfbf6c..e2cc4801f2 100644
+index 820bbfbf6c961..e2cc4801f28a0 100644
 --- a/player/video.c
 +++ b/player/video.c
 @@ -279,6 +279,8 @@ void reinit_video_chain_src(struct MPContext *mpctx, struct track *track)
@@ -1338,7 +1325,7 @@ index 820bbfbf6c..e2cc4801f2 100644
          goto err_out;
  
 diff --git a/video/filter/vf_format.c b/video/filter/vf_format.c
-index ff64c6fce3..6b97190202 100644
+index ff64c6fce37b0..6b971902024b7 100644
 --- a/video/filter/vf_format.c
 +++ b/video/filter/vf_format.c
 @@ -61,6 +61,7 @@ struct vf_format_opts {
@@ -1383,7 +1370,7 @@ index ff64c6fce3..6b97190202 100644
              .film_grain = true,
          },
 diff --git a/video/img_format.c b/video/img_format.c
-index 3dbd94fe62..8d2b0d058b 100644
+index 3dbd94fe62517..8d2b0d058b1e8 100644
 --- a/video/img_format.c
 +++ b/video/img_format.c
 @@ -553,7 +553,7 @@ static bool get_native_desc(int mpfmt, struct mp_imgfmt_desc *desc)
@@ -1396,7 +1383,7 @@ index 3dbd94fe62..8d2b0d058b 100644
      int flags = desc->flags;
      if (!(flags & MP_IMGFLAG_COLOR_MASK))
 diff --git a/video/img_format.h b/video/img_format.h
-index 5f2044c944..8cc7788d76 100644
+index 5f2044c944fd6..8cc7788d76db9 100644
 --- a/video/img_format.h
 +++ b/video/img_format.h
 @@ -147,7 +147,7 @@ struct mp_imgfmt_desc {
@@ -1409,7 +1396,7 @@ index 5f2044c944..8cc7788d76 100644
  // For MP_IMGFLAG_PACKED_SS_YUV formats (packed sub-sampled YUV): positions of
  // further luma samples. luma_offsets must be an array of align_x size, and the
 diff --git a/video/mp_image.c b/video/mp_image.c
-index 0c177d556e..1ce0555807 100644
+index 0c177d556ee6e..1ce05558070a4 100644
 --- a/video/mp_image.c
 +++ b/video/mp_image.c
 @@ -237,6 +237,7 @@ static void mp_image_destructor(void *ptr)
@@ -1484,7 +1471,7 @@ index 0c177d556e..1ce0555807 100644
              MP_HANDLE_OOM(dovi);
              pl_map_avdovi_metadata(&dst->params.color, &dst->params.repr,
 diff --git a/video/mp_image.h b/video/mp_image.h
-index 5fe523dd64..f5c1562815 100644
+index 5fe523dd64e96..f5c1562815a21 100644
 --- a/video/mp_image.h
 +++ b/video/mp_image.h
 @@ -63,6 +63,9 @@ struct mp_image_params {
@@ -1507,7 +1494,7 @@ index 5fe523dd64..f5c1562815 100644
  
  struct mp_ff_side_data {
 diff --git a/video/out/vo.h b/video/out/vo.h
-index a98b0f9496..8e397618eb 100644
+index a98b0f9496853..8e397618eb911 100644
 --- a/video/out/vo.h
 +++ b/video/out/vo.h
 @@ -167,7 +167,7 @@ struct mp_pass_perf {
@@ -1520,7 +1507,7 @@ index a98b0f9496..8e397618eb 100644
  struct mp_frame_perf {
      int count;
 diff --git a/video/out/vo_gpu_next.c b/video/out/vo_gpu_next.c
-index 451c25e576..6875c352b5 100644
+index 451c25e576ce8..6875c352b5568 100644
 --- a/video/out/vo_gpu_next.c
 +++ b/video/out/vo_gpu_next.c
 @@ -114,6 +114,8 @@ struct priv {

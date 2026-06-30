@@ -15,7 +15,16 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKDIR="$REPO_ROOT/build"
 
-echo ">> applying orender (master) patches"
+# Pin the mpv-master base to the commit the vendored FEL patch was generated
+# against (dv-fel's rebase base), so patches-fel/ applies cleanly instead of
+# conflicting with the ~100 commits master has advanced since (notably in
+# vo_gpu_next.c). MPV_FEL_BASE comes from deps-fel/pins-fel.env; re-vendor the
+# patch and bump that SHA together when moving to a newer dv-fel snapshot.
+# shellcheck source=../deps-fel/pins-fel.env
+source "$REPO_ROOT/deps-fel/pins-fel.env"
+export MPV_MASTER_REF="${MPV_FEL_BASE:-master}"
+
+echo ">> applying orender (master) patches (mpv base: $MPV_MASTER_REF)"
 bash "$REPO_ROOT/scripts/apply-patches-master.sh"
 
 # apply-patches-master.sh names the tree build/mpv-master-<short-sha> from the
