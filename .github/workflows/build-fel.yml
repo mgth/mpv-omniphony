@@ -309,6 +309,31 @@ jobs:
           # with a v-version so `git describe` yields one; see that step's note.)
           meson compile -C _b macos-bundle   # -> _b/mpv.app
 
+          # dylib_unhell relocates the Homebrew deps but leaves our from-source
+          # FEL libplacebo/ffmpeg (under $PREFIX/fel-prefix) referenced by absolute
+          # path — they'd be missing on a clean Mac. Pull those (and any transitive
+          # deps) into the bundle's lib dir, matching dylib_unhell's layout
+          # (@executable_path/lib), with a small recursive worklist. Runs before
+          # the Brand step's codesign + leak gate.
+          APP=_b/mpv.app
+          LIBDIR="$APP/Contents/MacOS/lib"; mkdir -p "$LIBDIR"
+          worklist=("$APP/Contents/MacOS/mpv")
+          for f in "$LIBDIR"/*.dylib; do [ -f "$f" ] && worklist+=("$f"); done
+          while [ ${#worklist[@]} -gt 0 ]; do
+            obj="${worklist[0]}"; worklist=("${worklist[@]:1}")
+            while read -r ref; do
+              base=$(basename "$ref")
+              if [ ! -f "$LIBDIR/$base" ]; then
+                real="$ref"; [ -f "$real" ] || real="$PREFIX/lib/$base"
+                [ -f "$real" ] || { echo "  ! NOT FOUND: $ref" >&2; continue; }
+                cp "$real" "$LIBDIR/$base"; chmod u+w "$LIBDIR/$base"
+                install_name_tool -id "@executable_path/lib/$base" "$LIBDIR/$base"
+                worklist+=("$LIBDIR/$base"); echo "  + relocated $base"
+              fi
+              install_name_tool -change "$ref" "@executable_path/lib/$base" "$obj" 2>/dev/null || true
+            done < <(otool -L "$obj" | awk 'NR>1 {print $1}' | grep -E "^($PREFIX|/opt/homebrew|/usr/local)/")
+          done
+
       - name: Brand, verify and package the .app
         run: |
           cd "$MPV_DIR/_b"
