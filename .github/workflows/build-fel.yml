@@ -265,16 +265,18 @@ jobs:
       - name: Build mpv (linked against FEL prefix)
         run: |
           PREFIX="$GITHUB_WORKSPACE/fel-prefix"
-          # FEL prefix FIRST so its libplacebo/ffmpeg shadow brew's; then orender; then brew.
-          export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${{ github.workspace }}/sysroot/usr/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig"
+          # FEL prefix FIRST so its libplacebo/ffmpeg shadow brew's; then orender;
+          # then brew (incl. vulkan-loader for the GUI Vulkan/MoltenVK stack).
+          export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${{ github.workspace }}/sysroot/usr/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig:$(brew --prefix vulkan-loader)/lib/pkgconfig"
           export DYLD_LIBRARY_PATH="$PREFIX/lib:${{ github.workspace }}/sysroot/usr/lib"
           export PATH="$PREFIX/bin:$PATH"
           cd "$MPV_DIR"
           # No CUDA/VA-API on macOS; Vulkan -> MoltenVK is the gpu-next path.
-          # libbluray/dvdnav (BD/DVD/ISO) from brew; the recursive dylib bundler
-          # in the packaging step picks them up into the self-contained zip.
+          # libbluray/dvdnav (BD/DVD/ISO) from brew. Force cocoa/swift/vulkan so the
+          # GUI display stack is built; mpv's macos-bundle relocates everything next.
           meson setup _b -Dorender=enabled -Dvulkan=enabled \
-            -Dlibbluray=enabled -Ddvdnav=enabled
+            -Dlibbluray=enabled -Ddvdnav=enabled \
+            -Dcocoa=enabled -Dswift-build=enabled
           meson compile -C _b
           echo "== mpv libplacebo linkage =="
           otool -L _b/mpv | grep -E 'libplacebo|libavcodec' || true
@@ -285,79 +287,43 @@ jobs:
           _b/mpv --gpu-api=help | grep -qi vulkan \
             || echo "!! warning: vulkan gpu-api not listed (MoltenVK detection?)" >&2
 
-      - name: Package (zip, bundling FEL + Vulkan dylibs)
+      - name: Bundle into mpv.app (mpv's native macos-bundle)
         run: |
-          mkdir -p staging
-          cp "$MPV_DIR/_b/mpv" staging/
-          cp sysroot/usr/lib/liborender.dylib staging/
-          cp sysroot/usr/include/orender.h staging/
-          cp README.md staging/
-          # MoltenVK is dlopen'd by the Vulkan loader via its ICD (not a link-time
-          # dep), so copy it explicitly; libvulkan itself is pulled in below as a
-          # dep of libplacebo by the walker. Normalise its id to @rpath (its brew
-          # install id is an absolute path the leak gate rejects; the worklist
-          # only rewrites a seed's dependencies, never its own id).
-          cp "$(brew --prefix molten-vk)/lib/libMoltenVK.dylib" staging/
-          chmod u+w staging/libMoltenVK.dylib
-          install_name_tool -id @rpath/libMoltenVK.dylib staging/libMoltenVK.dylib
+          # mpv's upstream osxbundle.py + dylib_unhell.py relocate every dylib
+          # (liborender + the from-source FEL libplacebo/ffmpeg + brew deps) into
+          # the app and wire MoltenVK + its ICD correctly — the same fix validated
+          # for the stable release (#22/#37). FEL prefix first on PKG_CONFIG_PATH
+          # so dylib_unhell's optional `pkg-config vulkan` probe resolves.
+          PREFIX="$GITHUB_WORKSPACE/fel-prefix"
+          export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${{ github.workspace }}/sysroot/usr/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig:$(brew --prefix vulkan-loader)/lib/pkgconfig"
+          cd "$MPV_DIR"
+          meson compile -C _b macos-bundle   # -> _b/mpv.app
 
-          # liborender first (older OMNIPHONY_REFs lack the @rpath id).
-          install_name_tool -id @rpath/liborender.dylib staging/liborender.dylib
-          old_ref=$(otool -L staging/mpv | awk '/liborender\.dylib/ {print $1; exit}')
-          if [ -n "$old_ref" ] && [ "$old_ref" != "@rpath/liborender.dylib" ]; then
-            install_name_tool -change "$old_ref" @rpath/liborender.dylib staging/mpv
-          fi
-
-          # Recursive non-system dylib bundler (matches release.yml's macOS job).
-          is_system() { case "$1" in /usr/lib/*|/System/*|@*) return 0 ;; esac; return 1; }
-          resolve() { python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
-          worklist=(staging/mpv staging/liborender.dylib staging/libMoltenVK.dylib)
-          while [ ${#worklist[@]} -gt 0 ]; do
-            obj="${worklist[0]}"; worklist=("${worklist[@]:1}")
-            echo "scanning $obj"
-            while read -r ref; do
-              is_system "$ref" && continue
-              base=$(basename "$ref")
-              if [ ! -f "staging/$base" ]; then
-                real=$(resolve "$ref")
-                if [ -f "$real" ]; then
-                  cp "$real" "staging/$base"; chmod u+w "staging/$base"
-                  install_name_tool -id "@rpath/$base" "staging/$base"
-                  worklist+=("staging/$base"); echo "  + $base"
-                else
-                  echo "  ! NOT FOUND: $ref"
-                fi
-              fi
-              install_name_tool -change "$ref" "@rpath/$base" "$obj" 2>/dev/null || true
-            done < <(otool -L "$obj" | awk 'NR>1 {print $1}')
-          done
-          for f in staging/*.dylib; do
-            install_name_tool -add_rpath @loader_path "$f" 2>/dev/null || true
-          done
-          install_name_tool -add_rpath @loader_path staging/mpv 2>/dev/null || true
-          install_name_tool -add_rpath @executable_path staging/mpv 2>/dev/null || true
-
-          # MoltenVK ICD pointing at the bundled driver (relative to the json dir).
-          # Users export VK_ICD_FILENAMES to this file (documented in the release).
-          # Homebrew installs the ICD under etc/ (not share/) and the path has
-          # drifted before, so locate it with find rather than hardcoding.
-          mkdir -p staging/share/vulkan/icd.d
-          icd_src=$(find -L "$(brew --prefix molten-vk)" -name MoltenVK_icd.json 2>/dev/null | head -1)
-          test -n "$icd_src" || { echo "!! MoltenVK_icd.json not found under molten-vk prefix" >&2; exit 1; }
-          sed 's#"library_path"[[:space:]]*:[[:space:]]*"[^"]*"#"library_path": "../../../libMoltenVK.dylib"#' \
-            "$icd_src" > staging/share/vulkan/icd.d/MoltenVK_icd.json
-
-          # Gate: nothing must still link an absolute brew/local path.
-          leak=$(for f in staging/mpv staging/*.dylib; do
-                   otool -L "$f" | awk 'NR>1 {print $1}'
-                 done | grep -E '^/(opt/homebrew|usr/local)' | sort -u || true)
-          if [ -n "$leak" ]; then
-            echo "!! un-bundled absolute references remain:" >&2
-            echo "$leak" >&2
-            exit 1
-          fi
-
-          cd staging && zip -r "../mpv-omniphony-fel-macos-arm64.zip" .
+      - name: Brand, verify and package the .app
+        run: |
+          cd "$MPV_DIR/_b"
+          mv mpv.app mpv-omniphony.app
+          PB=/usr/libexec/PlistBuddy
+          "$PB" -c "Set :CFBundleIdentifier fr.mgth.mpv-omniphony" mpv-omniphony.app/Contents/Info.plist
+          "$PB" -c "Set :CFBundleName mpv-omniphony"               mpv-omniphony.app/Contents/Info.plist
+          "$PB" -c "Add :CFBundleDisplayName string mpv-omniphony" mpv-omniphony.app/Contents/Info.plist 2>/dev/null || true
+          codesign --force --deep --sign - mpv-omniphony.app
+          ./mpv-omniphony.app/Contents/MacOS/mpv --version
+          ./mpv-omniphony.app/Contents/MacOS/mpv --gpu-api=help | grep -qi vulkan \
+            || echo "!! warning: vulkan gpu-api not listed (MoltenVK detection?)" >&2
+          test -f mpv-omniphony.app/Contents/Frameworks/libMoltenVK.dylib \
+            || { echo "!! libMoltenVK.dylib not bundled" >&2; exit 1; }
+          test -f mpv-omniphony.app/Contents/Resources/vulkan/icd.d/MoltenVK_icd.json \
+            || { echo "!! MoltenVK ICD not bundled" >&2; exit 1; }
+          # The bundled libMoltenVK keeps its brew install id by design (dlopen'd
+          # via the ICD's relative path); exclude it. Catch any other absolute
+          # brew/local OR un-relocated FEL-prefix dependency.
+          leak=$(find mpv-omniphony.app -type f \( -name '*.dylib' -o -name mpv \) -print0 \
+                 | xargs -0 -I{} sh -c 'otool -L "{}" | awk "NR>1{print \$1}"' \
+                 | grep -E "^(/opt/homebrew|/usr/local|$GITHUB_WORKSPACE)" \
+                 | grep -v '/libMoltenVK\.dylib$' | sort -u || true)
+          [ -z "$leak" ] || { echo "!! un-bundled absolute references remain:" >&2; echo "$leak" >&2; exit 1; }
+          zip -ry "${GITHUB_WORKSPACE}/mpv-omniphony-fel-macos-arm64.zip" mpv-omniphony.app
 
       - uses: actions/upload-artifact@v4
         with:
