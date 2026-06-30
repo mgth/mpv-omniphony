@@ -297,6 +297,13 @@ jobs:
           PREFIX="$GITHUB_WORKSPACE/fel-prefix"
           export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${{ github.workspace }}/sysroot/usr/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig:$(brew --prefix vulkan-loader)/lib/pkgconfig"
           cd "$MPV_DIR"
+          # osxbundle.py's bundle_version() insists on `#define VERSION "v..."`,
+          # but this git-snapshot build of mpv master falls back to MPV_VERSION
+          # ("0.41.0-UNKNOWN", no leading v) → the bundler dies with IndexError.
+          # Prefix the generated version with `v` if it lacks one. (The v0.41.0
+          # tarball builds already carry the v, so this is FEL/master-only.)
+          vh=_b/common/version.h
+          [ -f "$vh" ] && sed -i '' -E 's/(#define[[:space:]]+VERSION[[:space:]]+")([^v"])/\1v\2/' "$vh"
           meson compile -C _b macos-bundle   # -> _b/mpv.app
 
       - name: Brand, verify and package the .app
