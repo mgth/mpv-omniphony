@@ -271,6 +271,14 @@ jobs:
           export DYLD_LIBRARY_PATH="$PREFIX/lib:${{ github.workspace }}/sysroot/usr/lib"
           export PATH="$PREFIX/bin:$PATH"
           cd "$MPV_DIR"
+          # mpv-player/mpv carries a non-v lightweight tag (`git-release`) that
+          # `git describe --tags` resolves to, so mpv's generated version.h lacks
+          # the leading `v` that master's osxbundle.py bundle_version() regex
+          # requires — `re.findall(...)[0]` then dies with IndexError during
+          # macos-bundle. Drop a v-tag at HEAD so describe yields a v-version
+          # (it's distance 0, closer than git-release). FEL/master-only; the
+          # v0.41.0 tarball builds already carry the v.
+          ver=$(cat MPV_VERSION 2>/dev/null); git tag -f "v${ver%-UNKNOWN}-fel" HEAD >/dev/null 2>&1 || true
           # No CUDA/VA-API on macOS; Vulkan -> MoltenVK is the gpu-next path.
           # libbluray/dvdnav (BD/DVD/ISO) from brew. Force cocoa/swift/vulkan so the
           # GUI display stack is built; mpv's macos-bundle relocates everything next.
@@ -297,13 +305,8 @@ jobs:
           PREFIX="$GITHUB_WORKSPACE/fel-prefix"
           export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${{ github.workspace }}/sysroot/usr/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig:$(brew --prefix vulkan-loader)/lib/pkgconfig"
           cd "$MPV_DIR"
-          # osxbundle.py's bundle_version() insists on `#define VERSION "v..."`,
-          # but this git-snapshot build of mpv master falls back to MPV_VERSION
-          # ("0.41.0-UNKNOWN", no leading v) → the bundler dies with IndexError.
-          # Prefix the generated version with `v` if it lacks one. (The v0.41.0
-          # tarball builds already carry the v, so this is FEL/master-only.)
-          vh=_b/common/version.h
-          [ -f "$vh" ] && sed -i '' -E 's/(#define[[:space:]]+VERSION[[:space:]]+")([^v"])/\1v\2/' "$vh"
+          # (version.h already carries a v-prefix — the build step tagged HEAD
+          # with a v-version so `git describe` yields one; see that step's note.)
           meson compile -C _b macos-bundle   # -> _b/mpv.app
 
       - name: Brand, verify and package the .app
