@@ -12,7 +12,7 @@ jobs:
     env:
       MPV_TAG: v0.41.0     # keep in sync with scripts/ and PKGBUILD
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build deps
         run: |
