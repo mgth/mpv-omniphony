@@ -528,8 +528,11 @@ jobs:
           mkdir -p staging-libmpv/include/mpv
           cp "build/mpv-${MPV_TAG}/include/mpv/"*.h staging-libmpv/include/mpv/
           mv staging-libmpv/orender.h staging-libmpv/include/
-          # MSVC can't link the MinGW import library; it builds its own from this.
-          python3 scripts/make-import-def.py \
+          # MSVC can't link the MinGW import library; it builds its own from
+          # this. Restrict it to the client API: the DLL also exports the Lua
+          # interpreter mpv links statically, and an import library carrying
+          # luaL_* would collide with a consumer's own Lua for no reason.
+          python3 scripts/make-import-def.py --prefix mpv_ \
             "staging-libmpv/$(basename "$dll")" staging-libmpv/mpv.def
           cp packaging/libmpv-README.md staging-libmpv/README.md
         shell: bash
