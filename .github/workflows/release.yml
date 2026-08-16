@@ -15,6 +15,20 @@ on:
       # build-fel.yml on the master track; keep them off the stable release.
       - '!*-fel*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Version label used in the asset filenames (e.g. v0.5.0). Defaults to
+          the ref name. Set it when rebuilding an asset for an already-published
+          release.
+        required: false
+        default: ''
+      windows_only:
+        description: >-
+          Skip the Linux and macOS builds. Used to produce a Windows-only asset
+          (e.g. the libmpv SDK) for a release that already shipped.
+        type: boolean
+        default: false
 
 env:
   MPV_TAG: v0.41.0
@@ -25,9 +39,16 @@ env:
   # ship an old liborender (config parsed differently → default room). Bump
   # this one line on each release.
   OMNIPHONY_REF: v0.5.0
+  # Version label baked into the asset filenames: the tag on a tag push, the
+  # `version` input on a manual run. The zip steps flatten any '/' — a branch
+  # ref name would otherwise make `zip` write into a directory that isn't there.
+  VERSION: ${{ inputs.version || github.ref_name }}
 
 jobs:
   build-linux:
+    # `windows_only` manual runs rebuild a Windows asset for a release that
+    # already shipped; the other platforms would just burn CI time.
+    if: ${{ !inputs.windows_only }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -132,7 +153,7 @@ jobs:
           cp "build/mpv-${MPV_TAG}/_b/mpv" staging/
           cp README.md staging/
           cd staging
-          zip -r "../mpv-omniphony-${GITHUB_REF_NAME}-linux-x86_64.zip" .
+          zip -r "../mpv-omniphony-${VERSION//\//-}-linux-x86_64.zip" .
 
       - uses: actions/upload-artifact@v6
         with:
@@ -474,7 +495,7 @@ jobs:
         run: |
           ls -la staging/
           cd staging
-          zip -r "../mpv-omniphony-${GITHUB_REF_NAME}-windows-x86_64.zip" .
+          zip -r "../mpv-omniphony-${VERSION//\//-}-windows-x86_64.zip" .
 
       - uses: actions/upload-artifact@v6
         with:
@@ -520,7 +541,7 @@ jobs:
         run: |
           ls -la staging-libmpv/
           cd staging-libmpv
-          zip -r "../libmpv-omniphony-${GITHUB_REF_NAME}-windows-x86_64.zip" .
+          zip -r "../libmpv-omniphony-${VERSION//\//-}-windows-x86_64.zip" .
 
       - uses: actions/upload-artifact@v6
         with:
@@ -530,6 +551,7 @@ jobs:
   # macOS (Apple Silicon): mpv builds natively, so liborender is built in the
   # same job (like the Linux job, unlike the Windows cross-compile split).
   build-macos:
+    if: ${{ !inputs.windows_only }}
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v5
@@ -658,7 +680,7 @@ jobs:
 
           # Single artifact: the .app. CLI users run mpv-omniphony.app/Contents/MacOS/mpv
           # (the binary needs Contents/Frameworks + Resources for MoltenVK/ICD).
-          zip -ry "${GITHUB_WORKSPACE}/mpv-omniphony-${GITHUB_REF_NAME}-macos-arm64.zip" mpv-omniphony.app
+          zip -ry "${GITHUB_WORKSPACE}/mpv-omniphony-${VERSION//\//-}-macos-arm64.zip" mpv-omniphony.app
 
       - uses: actions/upload-artifact@v6
         with:
@@ -666,6 +688,10 @@ jobs:
           path: mpv-omniphony-*-macos-arm64.zip
 
   release:
+    # Tag pushes only. A manual run is a build (smoke test, or an asset for an
+    # already-published release): it uploads artifacts and stops there, rather
+    # than drafting a release named after a branch.
+    if: startsWith(github.ref, 'refs/tags/')
     needs: [build-linux, build-windows, build-macos]
     runs-on: ubuntu-latest
     permissions:
