@@ -481,6 +481,52 @@ jobs:
           name: mpv-omniphony-windows-x86_64
           path: mpv-omniphony-*-windows-x86_64.zip
 
+      # Second Windows asset for embedders (mgth/mpv-omniphony#50): the same
+      # build's libmpv, kept out of the player zip so a plain user download does
+      # not grow by another ~15 MB of DLL + headers.
+      - name: Stage libmpv SDK
+        run: |
+          B="build/mpv-${MPV_TAG}/_b"
+          # mpv's `libmpv` meson option defaults to true, so the cplayer build
+          # above already produced the shared library — fail loudly rather than
+          # ship an empty SDK if a future mpv bump flips that default. The DLL
+          # carries the client-API major (libmpv-2.dll today); glob it so an API
+          # bump renames the file instead of breaking the job.
+          dll=$(ls "$B"/libmpv-*.dll 2>/dev/null | head -1)
+          implib=$(ls "$B"/libmpv*.dll.a 2>/dev/null | head -1)
+          [ -n "$dll" ] && [ -n "$implib" ] \
+            || { echo "!! libmpv not built"; ls "$B"; exit 1; }
+          # Start from the player bundle so every transitive runtime DLL comes
+          # along (mpv.exe is libmpv plus a main(), so its import closure is a
+          # superset of libmpv's). Copying the directory rather than *.dll also
+          # keeps PE files with Unix-style versioned names (libgsm.dll.1.0.23).
+          cp -a staging staging-libmpv
+          rm -f staging-libmpv/mpv.exe staging-libmpv/mpv.com
+          cp "$dll" staging-libmpv/
+          cp "$implib" staging-libmpv/   # MinGW/clang import library
+          mkdir -p staging-libmpv/include/mpv
+          cp "build/mpv-${MPV_TAG}/include/mpv/"*.h staging-libmpv/include/mpv/
+          mv staging-libmpv/orender.h staging-libmpv/include/
+          # MSVC can't link the MinGW import library; it builds its own from this.
+          python3 scripts/make-import-def.py \
+            "staging-libmpv/$(basename "$dll")" staging-libmpv/mpv.def
+          cp packaging/libmpv-README.md staging-libmpv/README.md
+        shell: bash
+
+      - name: Verify staged libmpv imports resolve
+        run: python3 scripts/check-bundle-imports.py staging-libmpv
+
+      - name: Package libmpv zip
+        run: |
+          ls -la staging-libmpv/
+          cd staging-libmpv
+          zip -r "../libmpv-omniphony-${GITHUB_REF_NAME}-windows-x86_64.zip" .
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: libmpv-omniphony-windows-x86_64
+          path: libmpv-omniphony-*-windows-x86_64.zip
+
   # macOS (Apple Silicon): mpv builds natively, so liborender is built in the
   # same job (like the Linux job, unlike the Windows cross-compile split).
   build-macos:
@@ -635,6 +681,10 @@ jobs:
 
       - uses: actions/download-artifact@v7
         with:
+          name: libmpv-omniphony-windows-x86_64
+
+      - uses: actions/download-artifact@v7
+        with:
           name: mpv-omniphony-macos-arm64
 
       # Resolve the engine commit this build embeds, so the relocated release is
@@ -687,6 +737,15 @@ jobs:
             `xattr -dr com.apple.quarantine /path/to/mpv-omniphony.app`, or
             right-click → Open the first time.
 
+            **Embedding (Windows):** `libmpv-omniphony-…-windows-x86_64.zip`
+            carries `libmpv-2.dll` from this same build, with `libmpv.dll.a`
+            (MinGW), `mpv.def` (run `lib /def:mpv.def /name:libmpv-2.dll
+            /out:mpv.lib /MACHINE:X64` for MSVC), the `mpv/` headers and the
+            runtime DLLs. Spatial decoding works there too, but the engine is
+            searched next to the **host executable**, not next to
+            `libmpv-2.dll` — set `$ORENDER_LIBRARY` or the
+            `ad-orender-library` option if you put `orender.dll` elsewhere.
+
             **Upgrading?** The overlay is now built in: delete any
             `omniphony-overlay.lua` you previously copied into your mpv
             `scripts/` directory. A leftover copy is harmless (it self-disables
@@ -711,4 +770,5 @@ jobs:
           files: |
             mpv-omniphony-*-linux-x86_64.zip
             mpv-omniphony-*-windows-x86_64.zip
+            libmpv-omniphony-*-windows-x86_64.zip
             mpv-omniphony-*-macos-arm64.zip

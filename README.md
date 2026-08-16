@@ -45,6 +45,7 @@ scripts/regenerate-patches-master.sh # rebuild patches-master/ from `orender-mas
 meson-options.txt       # canonical `orender` meson feature option
 packaging/PKGBUILD          # Arch package against v0.41.0 (provides/conflicts mpv)
 packaging/PKGBUILD-master   # Arch -git package tracking master HEAD
+packaging/libmpv-README.md  # shipped inside the Windows libmpv SDK zip
 .github/workflows/ci.yml             # weekly drift check on v0.41.0
 .github/workflows/build-master.yml   # daily smoke test on master HEAD
 ```
@@ -66,6 +67,16 @@ scripts/regenerate-patches.sh /path/to/mpv-fork v0.41.0
 Running it (playback, the shared `~/.config/omniphony/config.yaml`, OSC, Studio
 supervision and the on-video overlay) is documented in the
 [usage guide](https://github.com/mgth/Omniphony/blob/main/docs/mpv-omniphony.md).
+
+### Embedding (libmpv)
+
+Windows releases carry a second asset,
+`libmpv-omniphony-<tag>-windows-x86_64.zip`: `libmpv-2.dll` from the same
+build, with the MinGW import library, an `mpv.def` for MSVC, the `mpv/`
+headers and the runtime DLLs. Details in
+[`packaging/libmpv-README.md`](packaging/libmpv-README.md) — note it is a
+**GPL-3.0-or-later** libmpv (mpv `-Dgpl=true` combined with liborender), not
+the LGPL build upstream publishes.
 
 ## mpv fork workflow
 
