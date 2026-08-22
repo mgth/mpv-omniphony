@@ -160,35 +160,6 @@ jobs:
           # ^ DVD (folder + ISO) from Martchus; libbluray is built from source
           # with embedded libudfread in a later step (BD-ISO), mirroring release.yml.
 
-      - name: Pin mingw-w64-x265 to match the prebuilt ffmpeg (repo skew)
-        run: |
-          # ownstuff is a rolling repo without versioned inter-package deps:
-          # its mingw-w64-ffmpeg 8.1.1 (built 2026-05-12) imports
-          # x265_api_get_215 (x265 4.1), but mingw-w64-x265 moved to 4.2
-          # (API 216) on 2026-07-20, so the current package pair is mutually
-          # broken — mpv.exe fails at startup on the missing x265 entry point.
-          # (This is exactly what broke the v0.4.2 Windows zip, before
-          # check-bundle-imports.py existed to catch it.) Downgrade to the
-          # matching x265 until Martchus rebuilds ffmpeg against x265 >= 4.2;
-          # the "Verify staged DLL imports resolve" step fails loudly when
-          # this pin needs revisiting, in either direction — at that point
-          # just delete this step.
-          #
-          # `pacman -U <url>` also fetches the detached .sig next to the
-          # package, which forces a verification that can only fail: the
-          # Martchus key is not in the container's keyring, and TrustAll does
-          # not help with a key that is entirely absent (it only relaxes the
-          # trust level of keys the keyring already has). Download the package
-          # alone (no .sig) and install the local file under
-          # LocalFileSigLevel = Optional (must be set explicitly: unset, it
-          # inherits the global `SigLevel = Required` and would reject an
-          # unsigned file too). No signature present -> verification skipped,
-          # the same effective trust-on-first-use as the repo installs above.
-          sed -i '/^\[options\]/a LocalFileSigLevel = Optional' /etc/pacman.conf
-          curl -sLO \
-            https://martchus.no-ip.biz/repo/arch/ownstuff/os/x86_64/mingw-w64-x265-4.1-1-any.pkg.tar.zst
-          pacman -U --noconfirm ./mingw-w64-x265-4.1-1-any.pkg.tar.zst
-
       - name: Build & install libsrt from source (ABI-matched to our libstdc++)
         run: |
           SYS=/usr/x86_64-w64-mingw32
