@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <sub@mgth.fr>
 Date: Fri, 14 Aug 2026 20:58:23 +0200
-Subject: [PATCH 25/28] ad_orender: size the scratch for the widest layout, not
+Subject: [PATCH 25/29] ad_orender: size the scratch for the widest layout, not
  the current mode (#12)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

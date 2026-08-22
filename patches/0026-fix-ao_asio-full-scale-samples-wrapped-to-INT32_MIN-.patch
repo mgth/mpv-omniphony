@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Sat, 15 Aug 2026 22:04:59 +0200
-Subject: [PATCH 26/28] fix(ao_asio): full-scale samples wrapped to INT32_MIN
+Subject: [PATCH 26/29] fix(ao_asio): full-scale samples wrapped to INT32_MIN
  on Int32 output
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

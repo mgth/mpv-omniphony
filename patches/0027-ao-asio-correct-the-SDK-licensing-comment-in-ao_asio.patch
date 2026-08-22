@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Sun, 16 Aug 2026 23:31:04 +0200
-Subject: [PATCH 27/28] ao/asio: correct the SDK-licensing comment in ao_asio.h
+Subject: [PATCH 27/29] ao/asio: correct the SDK-licensing comment in ao_asio.h
 
 The header claimed its ABI redeclaration followed "the approach used by
 PortAudio pa_asio.cpp and JACK ASIO host". Both of those include

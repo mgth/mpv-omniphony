@@ -31,6 +31,8 @@ static OrenderRenderer g;
 OrenderRenderer *orender_create(const OrenderConfig *c){(void)c;return &g;}
 void orender_destroy(OrenderRenderer *r){(void)r;}
 int orender_is_spatial(const OrenderRenderer *r){(void)r;return 0;}
+int orender_has_objects(const OrenderRenderer *r){(void)r;return 0;}
+uint64_t orender_output_latency_samples(const OrenderRenderer *r){(void)r;return 0;}
 uint32_t orender_channel_count(const OrenderRenderer *r){(void)r;return 0;}
 uint32_t orender_channel_layout(const OrenderRenderer *r,uint8_t *o,uint32_t c){(void)r;(void)o;(void)c;return 0;}
 int orender_channel_mode(const OrenderRenderer *r){(void)r;return 0;}

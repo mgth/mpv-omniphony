@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Tue, 26 May 2026 22:03:01 +0200
-Subject: [PATCH 06/28] ao/wasapi: advertise 5.1.4 / 7.1.4 / 9.1.6 in the
+Subject: [PATCH 06/29] ao/wasapi: advertise 5.1.4 / 7.1.4 / 9.1.6 in the
  exclusive layout search
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

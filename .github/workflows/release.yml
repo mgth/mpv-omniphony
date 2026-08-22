@@ -38,7 +38,7 @@ env:
   # construction, and removes the stale-prebuilt skew that made mpv silently
   # ship an old liborender (config parsed differently → default room). Bump
   # this one line on each release.
-  OMNIPHONY_REF: v0.5.0
+  OMNIPHONY_REF: v0.5.2
   # Version label baked into the asset filenames: the tag on a tag push, the
   # `version` input on a manual run. The zip steps flatten any '/' — a branch
   # ref name would otherwise make `zip` write into a directory that isn't there.

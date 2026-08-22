@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Fri, 12 Jun 2026 09:27:00 +0200
-Subject: [PATCH 10/28] ad_orender: use the per-OS config path in the
+Subject: [PATCH 10/29] ad_orender: use the per-OS config path in the
  bridge_path hint
 
 Back-port of mpv-omniphony commit 2df2800, which was applied to the

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Tue, 21 Jul 2026 15:43:51 +0200
-Subject: [PATCH 23/28] ad_orender: prefer orender_has_objects (ABI minor 6)
+Subject: [PATCH 23/29] ad_orender: prefer orender_has_objects (ABI minor 6)
 
 Resolve the object-content probe from the new live-fact symbol
 orender_has_objects, falling back to its deprecated alias

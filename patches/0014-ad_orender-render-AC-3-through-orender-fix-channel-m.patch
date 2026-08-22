@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Mon, 15 Jun 2026 08:14:44 +0200
-Subject: [PATCH 14/28] ad_orender: render AC-3 through orender; fix
+Subject: [PATCH 14/29] ad_orender: render AC-3 through orender; fix
  channel-mode option
 
 - Offer the orender decoder for the `ac3` codec (in addition to truehd,
