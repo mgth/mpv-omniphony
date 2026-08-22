@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Tue, 26 May 2026 12:50:45 +0200
-Subject: [PATCH 02/27] ao/asio: add Steinberg ASIO audio output driver
+Subject: [PATCH 02/28] ao/asio: add Steinberg ASIO audio output driver
 
 Add ao_asio, a pull-style audio output for mpv targeting Steinberg ASIO
 drivers on Windows. The driver:

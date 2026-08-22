@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Mon, 20 Jul 2026 18:23:18 +0200
-Subject: [PATCH 22/27] fix(ad): keep object content on spatial renderer
+Subject: [PATCH 22/28] fix(ad): keep object content on spatial renderer
 
 ---
  audio/decode/ad_orender.c | 116 ++++++++++++++++++++++++++++++++++----

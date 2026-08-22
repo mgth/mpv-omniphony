@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Tue, 16 Jun 2026 08:35:47 +0200
-Subject: [PATCH 16/27] feat(ad_orender): hide the spatial overlay in host mode
+Subject: [PATCH 16/28] feat(ad_orender): hide the spatial overlay in host mode
 
 When routing channel audio to the native host decoder, suppress the whole
 spatial overlay (wireframe cube included) via orender_overlay_set_rendering(0)

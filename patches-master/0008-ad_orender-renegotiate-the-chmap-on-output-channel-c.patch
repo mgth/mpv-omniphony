@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Thu, 11 Jun 2026 13:37:57 +0200
-Subject: [PATCH 08/27] ad_orender: renegotiate the chmap on output
+Subject: [PATCH 08/28] ad_orender: renegotiate the chmap on output
  channel-count changes
 
 Studio can switch the renderer's output mode (binaural stereo vs

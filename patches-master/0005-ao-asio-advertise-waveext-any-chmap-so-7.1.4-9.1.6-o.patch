@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Tue, 26 May 2026 20:09:02 +0200
-Subject: [PATCH 05/27] ao/asio: advertise waveext + any-chmap so 7.1.4/9.1.6
+Subject: [PATCH 05/28] ao/asio: advertise waveext + any-chmap so 7.1.4/9.1.6
  outputs aren't downmixed
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

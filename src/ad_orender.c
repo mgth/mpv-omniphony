@@ -149,6 +149,7 @@ struct priv {
     int last_objs;
     int last_dnorm;
     unsigned last_bed_sig;      // fingerprint of the bed labels (change detection)
+    uint64_t last_latency;      // last engine DSP latency, for change logging
     struct mp_decoder public;
 };
 
@@ -618,6 +619,23 @@ static void process_spatial(struct mp_filter *da, struct priv *p, bool probe_hos
      * Atmos flag, object count and DialNorm — surface them as the track's codec
      * profile so shift+I matches the native path (and adds objects + DialNorm). */
     refresh_codec_profile(p);
+
+    /* Compensate the engine's constant DSP latency (ABI minor >= 7; the stub
+     * reports 0): with the linear-phase FIR crossover active, the samples in
+     * this frame render input from `latency` samples earlier, so stamping
+     * them earlier by the same amount lines the video up with what is
+     * actually heard. Polled per frame — the figure changes when the
+     * crossover engine or the output mode is switched live in Studio; mpv
+     * absorbs the resulting PTS step as an ordinary A/V resync. */
+    uint64_t latency = p->dl->output_latency_samples(p->renderer);
+    if (latency != p->last_latency) {
+        MP_VERBOSE(da, "render output latency: %llu samples (%.1f ms)\n",
+                   (unsigned long long)latency,
+                   p->sample_rate > 0 ? latency * 1000.0 / p->sample_rate : 0.0);
+        p->last_latency = latency;
+    }
+    if (latency > 0 && p->sample_rate > 0 && pts != MP_NOPTS_VALUE)
+        pts -= (double)latency / p->sample_rate;
 
     out = mp_aframe_create();
     mp_aframe_set_format(out, AF_FORMAT_FLOAT);   /* interleaved float32 */

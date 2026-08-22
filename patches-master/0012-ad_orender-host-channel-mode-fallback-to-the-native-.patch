@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Sun, 14 Jun 2026 14:28:27 +0200
-Subject: [PATCH 12/27] ad_orender: host channel-mode fallback to the native
+Subject: [PATCH 12/28] ad_orender: host channel-mode fallback to the native
  decoder
 
 Add --ad-orender-channel-mode (auto/host/direct/virtual) and, in host mode on a

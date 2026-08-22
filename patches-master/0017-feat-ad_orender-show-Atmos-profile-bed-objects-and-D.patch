@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Tue, 16 Jun 2026 23:47:09 +0200
-Subject: [PATCH 17/27] feat(ad_orender): show Atmos profile, bed+objects and
+Subject: [PATCH 17/28] feat(ad_orender): show Atmos profile, bed+objects and
  DialNorm in track info
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
