@@ -146,6 +146,7 @@ distro/package ships the FEL API yet:
 | libplacebo master | reconstructs the FEL (needs `PL_API_VER >= 370`) | built by `build-fel-deps.sh` (upstream MR !851, merged to master) |
 | ffmpeg master | `dovi_split` BSF + DoVi stream group → BL/EL packets | built by `build-fel-deps.sh` (upstream) |
 | libdovi | RPU parsing for the EL | built by `build-fel-deps.sh` (quietvoid/dovi_tool) |
+| `patches-libplacebo/` | local libplacebo patches applied on top of master by `build-fel-deps.sh` | 9001: prefer FP16 swapchains for externally managed color; 9002: tone/gamut mapping rework (upstream [MR !875](https://code.videolan.org/videolan/libplacebo/-/merge_requests/875), not merged yet, see [#72](https://github.com/mgth/mpv-omniphony/issues/72)) |
 
 **Credits:** the Dolby Vision Profile 7 FEL work is by **kasper93** (Kacper
 Michajłow) — mpv [PR #17932](https://github.com/mpv-player/mpv/pull/17932),
@@ -165,6 +166,18 @@ the pinned `v0.41.0` tree does not have the feature (it will inherit it once mpv
 
 Refs come from `deps-fel/pins-fel.env` — now the **canonical upstream master**
 branches (`videolan/libplacebo` and `git.ffmpeg.org/ffmpeg`).
+
+**Tone mapping (patch 9002):** the FEL libplacebo carries kasper93's HDR → SDR
+tone/gamut mapping rework ahead of its upstream merge. It changes the default
+look of every tone-mapped (HDR source on an SDR target) frame, and adds two
+knobs reachable through mpv's pass-through option, e.g.
+`--libplacebo-opts=film_strength=0.3,mastering_clip=1` (`film_strength` in
+`[0,2]`, default 0.3: higher whitens compressed highlights like print film;
+`mastering_clip` in `[0,1]`, default 1: soft-clip above the mastering peak).
+The patch bumps the libplacebo soname, so a rebuilt prefix needs mpv relinked
+(`scripts/build-fel-local.sh --deps` does both; `SKIP_FFMPEG=1` reuses the
+ffmpeg already in the prefix). Drop the patch once the MR is in libplacebo
+master.
 
 ```sh
 # 1. build the dependency stack (libplacebo + ffmpeg + libdovi) into a prefix

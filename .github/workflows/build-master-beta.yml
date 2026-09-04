@@ -86,7 +86,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: fel-prefix
-          key: fel-linux-${{ needs.resolve-libplacebo.outputs.sha }}-${{ hashFiles('deps-fel/**', 'scripts/build-fel-deps.sh') }}
+          key: fel-linux-${{ needs.resolve-libplacebo.outputs.sha }}-${{ hashFiles('deps-fel/**', 'patches-libplacebo/**', 'scripts/build-fel-deps.sh') }}
 
       - name: Build FEL deps (libdovi + libplacebo master + ffmpeg master)
         if: steps.felcache.outputs.cache-hit != 'true'
@@ -264,7 +264,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: fel-prefix
-          key: fel-macos-${{ needs.resolve-libplacebo.outputs.sha }}-${{ hashFiles('deps-fel/**', 'scripts/build-fel-deps.sh') }}
+          key: fel-macos-${{ needs.resolve-libplacebo.outputs.sha }}-${{ hashFiles('deps-fel/**', 'patches-libplacebo/**', 'scripts/build-fel-deps.sh') }}
 
       - name: Build FEL deps (libdovi + libplacebo master + ffmpeg master)
         if: steps.felcache.outputs.cache-hit != 'true'
@@ -539,7 +539,7 @@ jobs:
           # (the include/libav* glob misses libswresample/libswscale), so a cache
           # hit left mpv unable to find <libswresample/swresample.h>. Bump to
           # rebuild + recache the prefix with those headers included.
-          key: fel-mingw-v2-${{ needs.resolve-libplacebo.outputs.sha }}-${{ hashFiles('deps-fel/**', 'scripts/build-fel-deps.sh') }}
+          key: fel-mingw-v2-${{ needs.resolve-libplacebo.outputs.sha }}-${{ hashFiles('deps-fel/**', 'patches-libplacebo/**', 'scripts/build-fel-deps.sh') }}
 
       - name: Write meson cross-file (x86_64-w64-mingw32)
         run: |

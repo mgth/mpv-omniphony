@@ -24,6 +24,8 @@
 #   CROSS_PREFIX  toolchain prefix for --cross (default: x86_64-w64-mingw32-)
 #   RUST_TARGET   cargo target for --cross (default: x86_64-pc-windows-gnu)
 #   SKIP_LIBDOVI  set to 1 to reuse a libdovi already on PKG_CONFIG_PATH
+#   SKIP_FFMPEG   set to 1 to reuse the ffmpeg already installed in $PREFIX
+#                 (e.g. to rebuild only libplacebo after a patches-libplacebo change)
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -107,8 +109,11 @@ PLACEBO_SHA="$(git -C "$WORK/libplacebo" rev-parse --short HEAD)"
 
 # Keep local integration fixes separate from upstream tracking. In particular,
 # the Wayland color-management path requests a PASS_THROUGH Vulkan colorspace;
-# without the patch below, libplacebo prefers 16-bit UNORM over FP16 and clips
-# extended-range scRGB values above 1.0.
+# without the 9001 patch below, libplacebo prefers 16-bit UNORM over FP16 and
+# clips extended-range scRGB values above 1.0. 9002 carries the not-yet-merged
+# tone/gamut mapping rework (upstream MR !875, mpv-omniphony#72); it bumps the
+# soname, so mpv must be relinked after a rebuild. Each patch's header says
+# where it comes from and when it can be dropped.
 pl_patches=("$REPO_ROOT"/patches-libplacebo/*.patch)
 if [ -e "${pl_patches[0]}" ]; then
     for patch in "${pl_patches[@]}"; do
@@ -174,6 +179,9 @@ fi
 # ---------------------------------------------------------------------------
 # 3. ffmpeg (upstream master — carries the dovi_split BSF + DoVi stream group).
 # ---------------------------------------------------------------------------
+if [ "${SKIP_FFMPEG:-0}" = 1 ] && "$PKGCONFIG" --exists libavcodec 2>/dev/null; then
+    log "ffmpeg already present in prefix (libavcodec $("$PKGCONFIG" --modversion libavcodec)) — skipping (SKIP_FFMPEG=1)"
+else
 log "ffmpeg $FFMPEG_REF"
 if [ ! -d "$WORK/ffmpeg/.git" ]; then
     git clone --branch "$FFMPEG_REF" "$FFMPEG_URL" "$WORK/ffmpeg"
@@ -208,6 +216,7 @@ fi
 ( cd "$WORK/ffmpeg" && ./configure "${ff_args[@]}" )
 make -C "$WORK/ffmpeg" -j"$JOBS"
 make -C "$WORK/ffmpeg" install
+fi
 
 # Run the freshly built ffmpeg CLI against ITS OWN libavcodec (loader path),
 # not whatever libavcodec happens to be on the system loader path — otherwise the
@@ -226,6 +235,8 @@ if [ "$CROSS" = 0 ]; then
             || { echo "!! dovi_split BSF missing from built ffmpeg" >&2; exit 1; }
     fi
     log "ffmpeg OK (dovi_split present)"
+elif [ "${SKIP_FFMPEG:-0}" = 1 ]; then
+    log "ffmpeg cross-built earlier (SKIP_FFMPEG=1, source tree not re-checked)"
 else
     grep -q dovi_split "$WORK/ffmpeg/libavcodec/bitstream_filters.c" \
         || { echo "!! dovi_split not registered in cross ffmpeg" >&2; exit 1; }
