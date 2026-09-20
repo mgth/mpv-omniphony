@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Sun, 14 Jun 2026 16:37:06 +0200
-Subject: [PATCH 13/28] ad_orender: route DTS to orender too
+Subject: [PATCH 13/29] ad_orender: route DTS to orender too
 
 Add "dts" to the codec gate in f_decoder_wrapper (decoder selection) and
 ad_orender (create + add_decoders + codec_desc), so DTS tracks decode through

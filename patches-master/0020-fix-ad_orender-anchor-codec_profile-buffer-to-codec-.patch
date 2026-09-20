@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Sat, 20 Jun 2026 21:55:59 +0200
-Subject: [PATCH 20/28] fix(ad_orender): anchor codec_profile buffer to codec
+Subject: [PATCH 20/29] fix(ad_orender): anchor codec_profile buffer to codec
  lifetime
 
 codec_profile was published from p->profile_buf, which lived inline in

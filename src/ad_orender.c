@@ -179,7 +179,9 @@ static int label_to_mp_speaker(uint8_t lbl)
     case OrenderChannelLabel_Tbl:  return MP_SPEAKER_ID_TBL;
     case OrenderChannelLabel_Tbr:  return MP_SPEAKER_ID_TBR;
     case OrenderChannelLabel_Tc:   return MP_SPEAKER_ID_TC;
-    default:      return MP_SPEAKER_ID_NA;  /* incl. Tsl/Tsr/Lsd/Rsd */
+    /* The height tier (Lh/Rh/Ch/Lhs/Rhs, 30° over the floor speakers) has no
+     * mpv speaker id either: like Tsl/Tsr/Lsd/Rsd it degrades to NA. */
+    default:      return MP_SPEAKER_ID_NA;
     }
 }
 
@@ -212,6 +214,11 @@ static const char *label_to_short_name(uint8_t lbl)
     case OrenderChannelLabel_Rw:   return "Rw";
     case OrenderChannelLabel_Tfc:  return "Tfc";
     case OrenderChannelLabel_Lfe2: return "LFE2";
+    case OrenderChannelLabel_Lh:   return "Lh";
+    case OrenderChannelLabel_Rh:   return "Rh";
+    case OrenderChannelLabel_Ch:   return "Ch";
+    case OrenderChannelLabel_Lhs:  return "Lhs";
+    case OrenderChannelLabel_Rhs:  return "Rhs";
     default:      return "?";
     }
 }

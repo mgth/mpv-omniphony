@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Fri, 21 Aug 2026 22:41:42 +0200
-Subject: [PATCH 28/28] ad_orender: compensate the engine's DSP latency in
+Subject: [PATCH 28/29] ad_orender: compensate the engine's DSP latency in
  output PTS
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
