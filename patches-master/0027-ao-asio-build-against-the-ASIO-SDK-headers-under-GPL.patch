@@ -353,10 +353,10 @@ index 3b4f598f53..c3f85dcf4c 100644
  
  #endif /* MP_AO_ASIO_H_ */
 diff --git a/meson.build b/meson.build
-index 7b7a0c9fc9..b13c5293fc 100644
+index 8d5ddd61b8..b829c5a8ec 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -958,11 +958,30 @@ if features['wasapi']
+@@ -982,11 +982,30 @@ if features['wasapi']
                       'audio/out/ao_wasapi_utils.c')
  endif
  
@@ -390,10 +390,10 @@ index 7b7a0c9fc9..b13c5293fc 100644
  endif
  
 diff --git a/meson.options b/meson.options
-index 5560b4f999..36750ad0b3 100644
+index bd1f7e1506..44a0261684 100644
 --- a/meson.options
 +++ b/meson.options
-@@ -57,7 +57,9 @@ option('pulse', type: 'feature', value: 'auto', description: 'PulseAudio audio o
+@@ -58,7 +58,9 @@ option('pulse', type: 'feature', value: 'auto', description: 'PulseAudio audio o
  option('sdl2-audio', type: 'feature', value: 'disabled', description: 'SDL2 audio output')
  option('sndio', type: 'feature', value: 'auto', description: 'sndio audio output')
  option('wasapi', type: 'feature', value: 'auto', description: 'WASAPI audio output')

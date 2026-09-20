@@ -451,7 +451,7 @@ index 96e5f6bb19..313a947f96 100644
      return &p->public;
  }
 diff --git a/filters/f_decoder_wrapper.c b/filters/f_decoder_wrapper.c
-index 8e25dc3a2d..61f2a15364 100644
+index 580eb0b02b..e0b4fcf14e 100644
 --- a/filters/f_decoder_wrapper.c
 +++ b/filters/f_decoder_wrapper.c
 @@ -192,11 +192,6 @@ struct priv {
@@ -466,7 +466,7 @@ index 8e25dc3a2d..61f2a15364 100644
      // Final PTS of previously decoded frame
      double pts;
  
-@@ -487,10 +482,13 @@ static bool reinit_decoder(struct priv *p)
+@@ -496,10 +491,13 @@ static bool reinit_decoder(struct priv *p)
          // `--ad=orender`. Unlike ad_spdif this outputs normal float PCM
          // (AF_FORMAT_FLOAT), so the native resampler / audio filter chain still
          // applies. Gated on the explicit decoder name so default playback is
@@ -482,7 +482,7 @@ index 8e25dc3a2d..61f2a15364 100644
               strcmp(p->codec->codec, "dts") == 0) &&
              decoder_list_has(user_list, "orender"))
          {
-@@ -504,7 +502,6 @@ static bool reinit_decoder(struct priv *p)
+@@ -513,7 +511,6 @@ static bool reinit_decoder(struct priv *p)
                  talloc_free(ol);
              }
          }
@@ -490,7 +490,7 @@ index 8e25dc3a2d..61f2a15364 100644
  #endif
      }
  
-@@ -1117,25 +1114,6 @@ static void read_frame(struct priv *p)
+@@ -1149,25 +1146,6 @@ static void read_frame(struct priv *p)
  
      frame = mp_pin_out_read(p->decoder->f->pins[1]);
      if (!frame.type) {
@@ -517,12 +517,12 @@ index 8e25dc3a2d..61f2a15364 100644
      }
  
 diff --git a/filters/f_decoder_wrapper.h b/filters/f_decoder_wrapper.h
-index 538a307efd..53f336d85c 100644
+index 7a3473d8bb..6c89b19171 100644
 --- a/filters/f_decoder_wrapper.h
 +++ b/filters/f_decoder_wrapper.h
-@@ -75,11 +75,6 @@ enum dec_ctrl {
-     // framedrop mode: 0=none, 1=standard, 2=hrseek
-     VDCTRL_SET_FRAMEDROP,
+@@ -81,11 +81,6 @@ enum dec_ctrl {
+     // int*: extra hw surfaces retained
+     VDCTRL_SET_EXTRA_HW_FRAMES,
      VDCTRL_CHECK_FORCED_EOF,
 -    // Audio: decoder asks the wrapper to fall back to the native decoder (e.g.
 -    // ad_orender on a non-object stream with channel-mode=host, or when the

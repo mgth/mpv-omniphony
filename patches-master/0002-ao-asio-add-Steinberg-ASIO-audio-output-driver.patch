@@ -1185,10 +1185,10 @@ index 0000000000..52640a3b60
 +
 +#endif /* MP_AO_ASIO_H_ */
 diff --git a/meson.build b/meson.build
-index 9bf878424c..6d4f25d234 100644
+index 837ea7ec89..154b8596e5 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -955,6 +955,14 @@ if features['wasapi']
+@@ -979,6 +979,14 @@ if features['wasapi']
                       'audio/out/ao_wasapi_utils.c')
  endif
  
@@ -1204,10 +1204,10 @@ index 9bf878424c..6d4f25d234 100644
  # video output dependencies
  caca_opt = get_option('caca').require(
 diff --git a/meson.options b/meson.options
-index 778923d9d1..b759d8ab6c 100644
+index e522407f06..8b2d25db3f 100644
 --- a/meson.options
 +++ b/meson.options
-@@ -57,6 +57,7 @@ option('pulse', type: 'feature', value: 'auto', description: 'PulseAudio audio o
+@@ -58,6 +58,7 @@ option('pulse', type: 'feature', value: 'auto', description: 'PulseAudio audio o
  option('sdl2-audio', type: 'feature', value: 'disabled', description: 'SDL2 audio output')
  option('sndio', type: 'feature', value: 'auto', description: 'sndio audio output')
  option('wasapi', type: 'feature', value: 'auto', description: 'WASAPI audio output')

@@ -23,10 +23,10 @@ probe and we keep going.
  1 file changed, 22 insertions(+)
 
 diff --git a/audio/out/ao_wasapi_utils.c b/audio/out/ao_wasapi_utils.c
-index 6744028665..b8e50c5bb7 100644
+index f79131d0bf..ab4cb47c77 100644
 --- a/audio/out/ao_wasapi_utils.c
 +++ b/audio/out/ao_wasapi_utils.c
-@@ -469,6 +469,28 @@ static bool search_channels(struct ao *ao, WAVEFORMATEXTENSIBLE *wformat)
+@@ -472,6 +472,28 @@ static bool search_channels(struct ao *ao, WAVEFORMATEXTENSIBLE *wformat)
          }
      }
  
