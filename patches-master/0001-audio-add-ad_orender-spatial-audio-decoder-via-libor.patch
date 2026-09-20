@@ -394,7 +394,7 @@ index 0000000000..e0002cfb38
 +    .add_decoders = add_decoders,
 +};
 diff --git a/filters/f_decoder_wrapper.c b/filters/f_decoder_wrapper.c
-index 08978e49f4..fc9ee68144 100644
+index 2b76b26b14..d1a408b058 100644
 --- a/filters/f_decoder_wrapper.c
 +++ b/filters/f_decoder_wrapper.c
 @@ -26,6 +26,7 @@
@@ -405,7 +405,7 @@ index 08978e49f4..fc9ee68144 100644
  #include "options/options.h"
  #include "common/msg.h"
  #include "options/m_config.h"
-@@ -418,6 +419,26 @@ struct mp_decoder_list *audio_decoder_list(void)
+@@ -419,6 +420,26 @@ struct mp_decoder_list *audio_decoder_list(void)
      return list;
  }
  
@@ -432,8 +432,8 @@ index 08978e49f4..fc9ee68144 100644
  static bool reinit_decoder(struct priv *p)
  {
      if (p->decoder)
-@@ -455,6 +476,29 @@ static bool reinit_decoder(struct priv *p)
-                 talloc_free(spdif);
+@@ -464,6 +485,29 @@ static bool reinit_decoder(struct priv *p)
+                 }
              }
          }
 +
@@ -463,13 +463,13 @@ index 08978e49f4..fc9ee68144 100644
  
      if (!driver)
 diff --git a/filters/f_decoder_wrapper.h b/filters/f_decoder_wrapper.h
-index a352dc0c4d..53f336d85c 100644
+index b39d3f5f2a..6c89b19171 100644
 --- a/filters/f_decoder_wrapper.h
 +++ b/filters/f_decoder_wrapper.h
-@@ -106,6 +106,9 @@ struct mp_decoder_fns {
- extern const struct mp_decoder_fns vd_lavc;
+@@ -113,6 +113,9 @@ extern const struct mp_decoder_fns vd_lavc;
  extern const struct mp_decoder_fns ad_lavc;
  extern const struct mp_decoder_fns ad_spdif;
+ extern const struct mp_decoder_fns ad_dsd;
 +#if HAVE_ORENDER
 +extern const struct mp_decoder_fns ad_orender;
 +#endif
@@ -477,10 +477,10 @@ index a352dc0c4d..53f336d85c 100644
  // Convenience wrapper for lavc based decoders. Treat lavc_state as private;
  // init to all-0 on init and resets.
 diff --git a/meson.build b/meson.build
-index 7efc2db333..9bf878424c 100644
+index 8fed718d1a..837ea7ec89 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -691,6 +691,13 @@ if features['libarchive']
+@@ -712,6 +712,13 @@ if features['libarchive']
                       'stream/stream_libarchive.c')
  endif
  
@@ -495,10 +495,10 @@ index 7efc2db333..9bf878424c 100644
  features += {'libavdevice': libavdevice.found()}
  if features['libavdevice']
 diff --git a/meson.options b/meson.options
-index 35e174ceba..778923d9d1 100644
+index 416ee3b5ed..e522407f06 100644
 --- a/meson.options
 +++ b/meson.options
-@@ -18,6 +18,7 @@ option('jpeg', type: 'feature', value: 'auto', description: 'libjpeg image write
+@@ -19,6 +19,7 @@ option('jpeg', type: 'feature', value: 'auto', description: 'libjpeg image write
  option('lcms2', type: 'feature', value: 'auto', description: 'LCMS2 support')
  option('libarchive', type: 'feature', value: 'auto', description: 'libarchive wrapper for reading zip files and more')
  option('libavdevice', type: 'feature', value: 'auto', description: 'libavdevice')
@@ -507,7 +507,7 @@ index 35e174ceba..778923d9d1 100644
  option('libcurl', type: 'feature', value: 'auto', description: 'libcurl-based stream backend')
  option('lua',
 diff --git a/options/options.c b/options/options.c
-index 48baef13ff..482b4aea6f 100644
+index e8b590af8c..64d1e6166a 100644
 --- a/options/options.c
 +++ b/options/options.c
 @@ -76,6 +76,9 @@ extern const struct m_sub_options demux_sbr_conf;
@@ -520,7 +520,7 @@ index 48baef13ff..482b4aea6f 100644
  extern const struct m_sub_options hwdec_conf;
  extern const struct m_sub_options input_config;
  extern const struct m_sub_options encode_config;
-@@ -704,6 +707,9 @@ static const m_option_t mp_opts[] = {
+@@ -713,6 +716,9 @@ static const m_option_t mp_opts[] = {
      {"", OPT_SUBSTRUCT(dec_wrapper, dec_wrapper_conf)},
      {"", OPT_SUBSTRUCT(vd_lavc_params, vd_lavc_conf)},
      {"ad-lavc", OPT_SUBSTRUCT(ad_lavc_params, ad_lavc_conf)},
@@ -531,10 +531,10 @@ index 48baef13ff..482b4aea6f 100644
      {"", OPT_SUBSTRUCT(hwdec_opts, hwdec_conf)},
  
 diff --git a/options/options.h b/options/options.h
-index 014e41de6d..636e28e2bc 100644
+index 26a791343f..0bf689c726 100644
 --- a/options/options.h
 +++ b/options/options.h
-@@ -387,6 +387,9 @@ typedef struct MPOpts {
+@@ -394,6 +394,9 @@ typedef struct MPOpts {
  
      struct vd_lavc_params *vd_lavc_params;
      struct ad_lavc_params *ad_lavc_params;

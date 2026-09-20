@@ -1315,10 +1315,10 @@ index 0000000000..6a69de6a57
 +
 +#endif
 diff --git a/meson.build b/meson.build
-index 5671a0082e..7b7a0c9fc9 100644
+index ff8b76776e..8d5ddd61b8 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -691,11 +691,13 @@ if features['libarchive']
+@@ -712,11 +712,13 @@ if features['libarchive']
                       'stream/stream_libarchive.c')
  endif
  
@@ -1336,10 +1336,10 @@ index 5671a0082e..7b7a0c9fc9 100644
  endif
  
 diff --git a/meson.options b/meson.options
-index b759d8ab6c..5560b4f999 100644
+index 8b2d25db3f..bd1f7e1506 100644
 --- a/meson.options
 +++ b/meson.options
-@@ -18,7 +18,7 @@ option('jpeg', type: 'feature', value: 'auto', description: 'libjpeg image write
+@@ -19,7 +19,7 @@ option('jpeg', type: 'feature', value: 'auto', description: 'libjpeg image write
  option('lcms2', type: 'feature', value: 'auto', description: 'LCMS2 support')
  option('libarchive', type: 'feature', value: 'auto', description: 'libarchive wrapper for reading zip files and more')
  option('libavdevice', type: 'feature', value: 'auto', description: 'libavdevice')

@@ -46,10 +46,10 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
  create mode 100644 player/orender_overlay.c
 
 diff --git a/meson.build b/meson.build
-index 6d4f25d234..5671a0082e 100644
+index 154b8596e5..ff8b76776e 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -695,7 +695,8 @@ orender = dependency('orender', version: '>= 0.1', required: get_option('orender
+@@ -716,7 +716,8 @@ orender = dependency('orender', version: '>= 0.1', required: get_option('orender
  features += {'orender': orender.found()}
  if features['orender']
      dependencies += orender
@@ -60,10 +60,10 @@ index 6d4f25d234..5671a0082e 100644
  
  libavdevice = dependency('libavdevice', version: '>= 60.3.100', required: get_option('libavdevice'))
 diff --git a/player/core.h b/player/core.h
-index b5e2f09ac3..92f47486f6 100644
+index 2889d352bd..7dd56f8c2c 100644
 --- a/player/core.h
 +++ b/player/core.h
-@@ -659,6 +659,9 @@ bool mp_load_scripts(struct MPContext *mpctx);
+@@ -664,6 +664,9 @@ bool mp_load_scripts(struct MPContext *mpctx);
  void mp_load_builtin_scripts(struct MPContext *mpctx);
  int64_t mp_load_user_script(struct MPContext *mpctx, const char *fname);
  
@@ -74,10 +74,10 @@ index b5e2f09ac3..92f47486f6 100644
  void redraw_subs(struct MPContext *mpctx);
  void reset_subtitle_state(struct MPContext *mpctx);
 diff --git a/player/main.c b/player/main.c
-index 6891c9d5a1..2f0662980a 100644
+index 0ef3d7f6d6..416dbf8795 100644
 --- a/player/main.c
 +++ b/player/main.c
-@@ -440,6 +440,10 @@ int mp_initialize(struct MPContext *mpctx, char **options)
+@@ -441,6 +441,10 @@ int mp_initialize(struct MPContext *mpctx, char **options)
  
      mp_load_scripts(mpctx);
  

@@ -164,7 +164,7 @@ index 4c2c7552b9..4eef87b7ed 100644
      codec->codec_desc = is_eac3 ? "eac3 (orender, spatial)"
                                  : "truehd (orender, spatial)";
 diff --git a/filters/f_decoder_wrapper.c b/filters/f_decoder_wrapper.c
-index fc9ee68144..1061c1cd0c 100644
+index d1a408b058..6ae0010a57 100644
 --- a/filters/f_decoder_wrapper.c
 +++ b/filters/f_decoder_wrapper.c
 @@ -192,6 +192,11 @@ struct priv {
@@ -179,7 +179,7 @@ index fc9ee68144..1061c1cd0c 100644
      // Final PTS of previously decoded frame
      double pts;
  
-@@ -483,7 +488,7 @@ static bool reinit_decoder(struct priv *p)
+@@ -492,7 +497,7 @@ static bool reinit_decoder(struct priv *p)
          // (AF_FORMAT_FLOAT), so the native resampler / audio filter chain still
          // applies. Gated on the explicit decoder name so default playback is
          // unaffected.
@@ -188,7 +188,7 @@ index fc9ee68144..1061c1cd0c 100644
              (strcmp(p->codec->codec, "truehd") == 0 ||
               strcmp(p->codec->codec, "eac3") == 0) &&
              decoder_list_has(user_list, "orender"))
-@@ -498,6 +503,7 @@ static bool reinit_decoder(struct priv *p)
+@@ -507,6 +512,7 @@ static bool reinit_decoder(struct priv *p)
                  talloc_free(ol);
              }
          }
@@ -196,7 +196,7 @@ index fc9ee68144..1061c1cd0c 100644
  #endif
      }
  
-@@ -1109,8 +1115,28 @@ static void read_frame(struct priv *p)
+@@ -1141,8 +1147,28 @@ static void read_frame(struct priv *p)
      p->reverse_queue_complete = false;
  
      frame = mp_pin_out_read(p->decoder->f->pins[1]);
@@ -227,12 +227,12 @@ index fc9ee68144..1061c1cd0c 100644
      mp_mutex_lock(&p->cache_lock);
      if (p->attached_picture && frame.type == MP_FRAME_VIDEO)
 diff --git a/filters/f_decoder_wrapper.h b/filters/f_decoder_wrapper.h
-index 53f336d85c..538a307efd 100644
+index 6c89b19171..7a3473d8bb 100644
 --- a/filters/f_decoder_wrapper.h
 +++ b/filters/f_decoder_wrapper.h
-@@ -75,6 +75,11 @@ enum dec_ctrl {
-     // framedrop mode: 0=none, 1=standard, 2=hrseek
-     VDCTRL_SET_FRAMEDROP,
+@@ -81,6 +81,11 @@ enum dec_ctrl {
+     // int*: extra hw surfaces retained
+     VDCTRL_SET_EXTRA_HW_FRAMES,
      VDCTRL_CHECK_FORCED_EOF,
 +    // Audio: decoder asks the wrapper to fall back to the native decoder (e.g.
 +    // ad_orender on a non-object stream with channel-mode=host, or when the

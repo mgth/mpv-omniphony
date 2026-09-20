@@ -56,10 +56,10 @@ index 4eef87b7ed..a5ca498659 100644
  
  const struct mp_decoder_fns ad_orender = {
 diff --git a/filters/f_decoder_wrapper.c b/filters/f_decoder_wrapper.c
-index 1061c1cd0c..8e25dc3a2d 100644
+index 6ae0010a57..580eb0b02b 100644
 --- a/filters/f_decoder_wrapper.c
 +++ b/filters/f_decoder_wrapper.c
-@@ -490,7 +490,8 @@ static bool reinit_decoder(struct priv *p)
+@@ -499,7 +499,8 @@ static bool reinit_decoder(struct priv *p)
          // unaffected.
          if (!p->orender_disabled && driver == &ad_lavc && p->codec->codec &&
              (strcmp(p->codec->codec, "truehd") == 0 ||

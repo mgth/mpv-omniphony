@@ -23,10 +23,10 @@ unaffected (Windows mixer caps to 7.1 downstream regardless).
  1 file changed, 13 insertions(+), 2 deletions(-)
 
 diff --git a/audio/out/ao_wasapi_utils.c b/audio/out/ao_wasapi_utils.c
-index a1e116b6c6..6744028665 100644
+index f17809c757..f79131d0bf 100644
 --- a/audio/out/ao_wasapi_utils.c
 +++ b/audio/out/ao_wasapi_utils.c
-@@ -435,7 +435,12 @@ static bool search_channels(struct ao *ao, WAVEFORMATEXTENSIBLE *wformat)
+@@ -438,7 +438,12 @@ static bool search_channels(struct ao *ao, WAVEFORMATEXTENSIBLE *wformat)
      struct wasapi_state *state = ao->priv;
      struct mp_chmap_sel chmap_sel = {.tmp = state};
      struct mp_chmap entry;
@@ -40,7 +40,7 @@ index a1e116b6c6..6744028665 100644
      char *channel_layouts[] =
          {"stereo", "5.1", "7.1", "6.1", "mono", "2.1", "4.0", "5.0",
           "3.0", "3.0(back)",
-@@ -443,7 +448,13 @@ static bool search_channels(struct ao *ao, WAVEFORMATEXTENSIBLE *wformat)
+@@ -446,7 +451,13 @@ static bool search_channels(struct ao *ao, WAVEFORMATEXTENSIBLE *wformat)
           "5.0(side)", "4.1",
           "5.1(side)", "6.0", "6.0(front)", "hexagonal",
           "6.1(back)", "6.1(front)", "7.0", "7.0(front)",
