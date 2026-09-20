@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Tue, 26 May 2026 14:58:45 +0200
-Subject: [PATCH 03/28] ci: add Windows ASIO build workflow
+Subject: [PATCH 03/29] ci: add Windows ASIO build workflow
 
 Add a dedicated GitHub Actions workflow that builds the ASIO-enabled
 mpv on Windows under MSYS2 UCRT64. The existing build.yml only fires

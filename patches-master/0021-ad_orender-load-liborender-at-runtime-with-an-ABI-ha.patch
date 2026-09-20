@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Thu, 2 Jul 2026 17:35:46 +0200
-Subject: [PATCH 21/28] ad_orender: load liborender at runtime with an ABI
+Subject: [PATCH 21/29] ad_orender: load liborender at runtime with an ABI
  handshake
 
 mpv linked liborender at build time (DT_NEEDED liborender.so.0), which

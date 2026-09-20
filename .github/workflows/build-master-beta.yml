@@ -34,7 +34,7 @@ on:
 env:
   # Rolling (cron/dispatch/path-push) builds track Omniphony main; a tagged beta
   # pins liborender to the matching release line for reproducibility.
-  OMNIPHONY_REF: ${{ startsWith(github.ref, 'refs/tags/') && 'v0.5.0' || 'main' }}
+  OMNIPHONY_REF: ${{ startsWith(github.ref, 'refs/tags/') && 'v0.6.0' || 'main' }}
 
 jobs:
   # Resolve the live upstream libplacebo master HEAD once so every platform keys
