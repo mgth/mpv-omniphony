@@ -29,9 +29,27 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 cd "$work"
 
-url="https://download.videolan.org/pub/videolan/libbluray/${LIBBLURAY_VER}/libbluray-${LIBBLURAY_VER}.tar.xz"
-echo ">> fetching $url"
-curl -fsSL -o libbluray.tar.xz "$url"
+# The release tarball: VideoLAN first and, when their download host does not
+# answer (it was unreachable for hours on the 0.6.0 release day and cost the
+# Windows bundle its build), the Debian pool and Launchpad, which carry the
+# pristine upstream archive. The hash pins it whatever the mirror served.
+LIBBLURAY_SHA256="${LIBBLURAY_SHA256:-76b5dc40097f28dca4ebb009c98ed51321b2927453f75cc72cf74acd09b9f449}"
+urls=(
+  "https://download.videolan.org/pub/videolan/libbluray/${LIBBLURAY_VER}/libbluray-${LIBBLURAY_VER}.tar.xz"
+  "https://deb.debian.org/debian/pool/main/libb/libbluray/libbluray_${LIBBLURAY_VER}.orig.tar.xz"
+  "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/libbluray/1:${LIBBLURAY_VER}-1/libbluray_${LIBBLURAY_VER}.orig.tar.xz"
+)
+fetched=
+for url in "${urls[@]}"; do
+  echo ">> fetching $url"
+  if curl -fsSL --connect-timeout 20 --max-time 300 --retry 2 -o libbluray.tar.xz "$url"; then
+    fetched=1
+    break
+  fi
+  echo "!! $url did not serve the archive, trying the next mirror" >&2
+done
+[ -n "$fetched" ] || { echo "!! no mirror served libbluray ${LIBBLURAY_VER}" >&2; exit 1; }
+echo "${LIBBLURAY_SHA256}  libbluray.tar.xz" | sha256sum -c -
 tar xf libbluray.tar.xz
 cd "libbluray-${LIBBLURAY_VER}"
 
