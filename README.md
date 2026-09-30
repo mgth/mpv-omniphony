@@ -42,6 +42,8 @@ scripts/apply-patches.sh             # clone pinned mpv + apply patches/
 scripts/apply-patches-master.sh      # clone mpv master HEAD + apply patches-master/
 scripts/regenerate-patches.sh        # rebuild patches/ from the fork's `orender`
 scripts/regenerate-patches-master.sh # rebuild patches-master/ from `orender-master`
+scripts/build-appimage.sh            # package a built mpv + liborender as a Linux AppImage
+scripts/smoke-test-appimage.sh       # run that AppImage in a Fedora container (CI gate)
 meson-options.txt       # canonical `orender` meson feature option
 packaging/PKGBUILD          # Arch package against v0.41.0 (provides/conflicts mpv)
 packaging/PKGBUILD-master   # Arch -git package tracking master HEAD
