@@ -237,7 +237,11 @@ jobs:
   # the real proof it renders; visual confirmation is delegated to a tester.
   build-macos:
     needs: resolve-libplacebo
-    runs-on: macos-14
+    # macOS 15: Homebrew no longer builds bottles for macOS 14, so on
+    # macos-14 `brew install ffmpeg libass` falls back to source builds and
+    # fails. The bundled dylibs come from Sequoia bottles, so the app needs
+    # macOS 15 or later.
+    runs-on: macos-15
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5

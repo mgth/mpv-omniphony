@@ -337,7 +337,11 @@ jobs:
   # intentionally omitted here — integration ships bare binary zips like the
   # Linux/Windows jobs. OMNIPHONY_REF=main (env) tracks the integration branch.
   build-macos:
-    runs-on: macos-14
+    # macOS 15: Homebrew no longer builds bottles for macOS 14, so on
+    # macos-14 `brew install ffmpeg libass` falls back to source builds and
+    # fails. The bundled dylibs come from Sequoia bottles, so the app needs
+    # macOS 15 or later.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
 

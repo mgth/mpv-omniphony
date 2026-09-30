@@ -531,7 +531,11 @@ jobs:
   # same job (like the Linux job, unlike the Windows cross-compile split).
   build-macos:
     if: ${{ !inputs.windows_only }}
-    runs-on: macos-14
+    # macOS 15: Homebrew no longer builds bottles for macOS 14, so on
+    # macos-14 `brew install ffmpeg libass` falls back to source builds and
+    # fails. The bundled dylibs come from Sequoia bottles, so the app needs
+    # macOS 15 or later.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
 
@@ -732,7 +736,8 @@ jobs:
             incompatible library is rejected with a clear log line and mpv
             falls back to its native decoders.
 
-            **macOS (Apple Silicon):** `…-macos-arm64.zip` contains a
+            **macOS (Apple Silicon, macOS 15 Sequoia or later):**
+            `…-macos-arm64.zip` contains a
             self-contained, double-clickable `mpv-omniphony.app` (built with
             mpv's own bundler — every dylib incl. ffmpeg and MoltenVK is bundled,
             no Homebrew required). CLI users run
