@@ -155,10 +155,24 @@ jobs:
           cd staging
           zip -r "../mpv-omniphony-${VERSION//\//-}-linux-x86_64.zip" .
 
+      # The zip above links this runner's Ubuntu sonames and only runs on
+      # Ubuntu 24.04 and derivatives; the AppImage carries its library closure
+      # and runs on any glibc >= 2.38 desktop (mgth/Omniphony#605).
+      - name: Package (AppImage)
+        run: |
+          soname=$(ls staging/liborender.so.*)
+          bash scripts/build-appimage.sh "build/mpv-${MPV_TAG}/_b" "$soname" \
+            "mpv-omniphony-${VERSION//\//-}-linux-x86_64.AppImage"
+
+      - name: Smoke-test the AppImage on Fedora
+        run: bash scripts/smoke-test-appimage.sh mpv-omniphony-*-linux-x86_64.AppImage
+
       - uses: actions/upload-artifact@v6
         with:
           name: mpv-omniphony-linux-x86_64
-          path: mpv-omniphony-*-linux-x86_64.zip
+          path: |
+            mpv-omniphony-*-linux-x86_64.zip
+            mpv-omniphony-*-linux-x86_64.AppImage
 
   # Build orender.dll from the same Omniphony ref, natively on Windows (MSVC,
   # C ABI) exactly like Omniphony's own liborender-release workflow. The mpv
@@ -723,6 +737,14 @@ jobs:
             bundled MinGW runtime DLLs on Windows. The live overlay is built
             into mpv itself — no script to install.
 
+            **Linux:** take the **AppImage** (`…-linux-x86_64.AppImage`). It
+            carries its own ffmpeg, libplacebo and Lua and runs on any
+            x86_64 desktop with glibc ≥ 2.38 (Fedora 39+, Ubuntu 24.04+,
+            Debian 13, Arch, …): `chmod +x` it, then run it like `mpv`, e.g.
+            `./mpv-omniphony-…-linux-x86_64.AppImage --ad=orender film.mkv`.
+            The `…-linux-x86_64.zip` is the bare binary linked against
+            Ubuntu 24.04's own libraries and runs only there.
+
             **Engine loading:** mpv no longer links the engine — it loads
             liborender at runtime with an ABI version check, searching:
             `--ad-orender-library` / `$ORENDER_LIBRARY` → the engine deployed
@@ -774,6 +796,7 @@ jobs:
             Bundled third-party libraries: see `THIRD-PARTY-NOTICES.md`.
           files: |
             mpv-omniphony-*-linux-x86_64.zip
+            mpv-omniphony-*-linux-x86_64.AppImage
             mpv-omniphony-*-windows-x86_64.zip
             libmpv-omniphony-*-windows-x86_64.zip
             mpv-omniphony-*-macos-arm64.zip

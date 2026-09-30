@@ -32,8 +32,15 @@ jobs:
           sudo apt-get install -y \
             meson ninja-build pkg-config gcc \
             libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libswscale-dev \
-            libass-dev libplacebo-dev liblua5.2-dev libx11-dev \
-            libbluray-dev libdvdnav-dev libdvdread-dev
+            libass-dev libplacebo-dev liblua5.2-dev \
+            libva-dev libdrm-dev libegl-dev libgl-dev \
+            libbluray-dev libdvdnav-dev libdvdread-dev \
+            libx11-dev libxss-dev libxext-dev libxpresent-dev libxrandr-dev \
+            libwayland-dev wayland-protocols libxkbcommon-dev \
+            libasound2-dev libpipewire-0.3-dev libpulse-dev
+          # Same set as release.yml: without the X11 extras, Wayland and the
+          # audio dev packages meson's auto features silently drop the
+          # windowed vo and every desktop ao (mgth/mpv-omniphony#59).
 
       - name: Checkout Omniphony (renderer source)
         uses: actions/checkout@v5
@@ -77,7 +84,12 @@ jobs:
           # liborender is a pure runtime dependency (dlopen) — nothing to point
           # the build at.
           cd "build/mpv-${MPV_TAG}"
-          meson setup _b -Dorender=enabled -Dlibbluray=enabled -Ddvdnav=enabled
+          # Backends forced on as in release.yml, so a missing dev package
+          # fails the build instead of shipping a player with no vo/ao.
+          meson setup _b -Dorender=enabled -Dlibbluray=enabled -Ddvdnav=enabled \
+            -Dvaapi=auto \
+            -Dx11=enabled -Dwayland=enabled \
+            -Dalsa=enabled -Dpipewire=enabled -Dpulse=enabled
           meson compile -C _b
 
       - name: Package (zip)
@@ -87,10 +99,21 @@ jobs:
           cd staging
           zip -r "../mpv-omniphony-integration-linux-x86_64.zip" .
 
+      - name: Package (AppImage)
+        run: |
+          soname=$(ls staging/liborender.so.*)
+          bash scripts/build-appimage.sh "build/mpv-${MPV_TAG}/_b" "$soname" \
+            mpv-omniphony-integration-linux-x86_64.AppImage
+
+      - name: Smoke-test the AppImage on Fedora
+        run: bash scripts/smoke-test-appimage.sh mpv-omniphony-integration-linux-x86_64.AppImage
+
       - uses: actions/upload-artifact@v6
         with:
           name: mpv-omniphony-linux-x86_64
-          path: mpv-omniphony-integration-linux-x86_64.zip
+          path: |
+            mpv-omniphony-integration-linux-x86_64.zip
+            mpv-omniphony-integration-linux-x86_64.AppImage
 
   build-liborender-windows:
     runs-on: windows-latest
@@ -488,10 +511,14 @@ jobs:
             (liborender built from source). **For testers — NOT a stable release.**
             Rebuilt daily and on demand; assets here are replaced each run.
 
+            **Linux:** use the `.AppImage` (any x86_64 desktop with glibc ≥ 2.38);
+            the `.zip` runs only on Ubuntu 24.04 and derivatives.
+
             **NOT bundled:** the decoder bridge plugin (`*_bridge.dll` / `.so`).
             Provide it via `--ad-orender-bridge-path=<absolute path>` or drop it
             next to `mpv(.exe)`.
           files: |
             mpv-omniphony-integration-linux-x86_64.zip
+            mpv-omniphony-integration-linux-x86_64.AppImage
             mpv-omniphony-integration-windows-x86_64.zip
             mpv-omniphony-integration-macos-arm64.zip
