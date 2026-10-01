@@ -1,0 +1,311 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mathieu GRENET <mathieu@mgth.fr>
+Date: Thu, 1 Oct 2026 11:53:12 +0200
+Subject: [PATCH 37/40] ad_orender: tell the engine where the listener is, so
+ Studio follows the sound
+
+The engine describes each block of audio to Omniphony Studio (object frame,
+meters) as it renders it, and mpv plays that block later by everything
+buffered behind the decoder: about half a second with the default buffers.
+Studio drew the scene that far ahead of the sound.
+
+Omniphony's engine (ABI 0.12, mgth/Omniphony#639) takes where the listener
+is through orender_set_option("heard_us") and passes it on to Studio, which
+then shows each block when it is heard. This reports it:
+
+- The player publishes playing_audio_pts() as it feeds the AO
+  (ad_orender_set_playing_pts, an atomic, since the decoder may run on its
+  own thread).
+- The decoder keeps a small map from demuxer timestamps to the engine's
+  timeline (*out_pts_us). One entry per offset change, so a seek or a
+  discontinuity, not one per packet. The map is built from the timestamp
+  before the DSP latency shift: the engine marks a block where it decoded
+  it, and that content plays at the unshifted timestamp.
+- On each packet the decoder sends the playing pts, translated through the
+  map, to the engine when it moved. A reset or a switch back to the
+  spatial path clears the map, and a pts the new map does not reach yet
+  says nothing.
+
+An engine older than 0.12 answers -1 to the probe at open, and nothing is
+sent ("heard position: not offered" in -v).
+
+Also resyncs the vendored ABI header to 0.12.
+
+Checked with --ao=null --vo=null on a TrueHD and an E-AC-3 sample against
+the workflow's engine, sniffing its OSC: the heard position advanced at
+1.000x real time, about 510 ms behind the newest block, reported every
+50 ms (one gap over 100 ms, at start-up).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 5b820cb1c7e7b5d6106fd49f0813e81527d3f1d9)
+---
+ audio/decode/ad_orender.c | 105 ++++++++++++++++++++++++++++++++++++++
+ audio/decode/ad_orender.h |   8 +++
+ common/orender_abi.h      |  13 +++--
+ player/audio.c            |  10 ++++
+ 4 files changed, 133 insertions(+), 3 deletions(-)
+
+diff --git a/audio/decode/ad_orender.c b/audio/decode/ad_orender.c
+index 23eb310e79..2fa1a6461c 100644
+--- a/audio/decode/ad_orender.c
++++ b/audio/decode/ad_orender.c
+@@ -25,9 +25,12 @@
+  * YAML (render.bridge_path), resolved by liborender when the config path is NULL.
+  */
+ 
++#include <inttypes.h>
+ #include <math.h>
++#include <stdatomic.h>
+ #include <stdbool.h>
+ #include <stdint.h>
++#include <stdio.h>
+ #include <string.h>
+ 
+ #include <libavcodec/avcodec.h>
+@@ -97,6 +100,29 @@ enum { PATH_NONE = -1, PATH_HOST = 0, PATH_SPATIAL = 1 };
+  * short one is grown and the packet retried before it is dropped. */
+ enum { SCRATCH_FRAMES = 4096, SCRATCH_RETRIES = 4 };
+ 
++/* Where the listener is, in demuxer-timestamp microseconds (INT64_MIN: not
++ * playing). Written by the player as it feeds the AO, read by the decoder,
++ * which may run on another thread. Process-wide: there is one AO. */
++static atomic_int_least64_t playing_pts_us = INT64_MIN;
++
++void ad_orender_set_playing_pts(double pts)
++{
++    atomic_store_explicit(&playing_pts_us,
++                          pts == MP_NOPTS_VALUE ? INT64_MIN : llrint(pts * 1e6),
++                          memory_order_relaxed);
++}
++
++/* How a demuxer timestamp maps onto the engine's timeline (*out_pts_us):
++ * from `pts_us` on, engine position = pts + `offset_us`. The two advance
++ * together, so an entry is added only when the offset moves (a seek, a
++ * discontinuity, timestamp drift past HEARD_SLACK_US), and a few cover
++ * everything between the decoder and the speakers. */
++enum { HEARD_MAP_LEN = 16, HEARD_SLACK_US = 2000 };
++struct heard_entry {
++    int64_t pts_us;
++    int64_t offset_us;
++};
++
+ struct priv {
+     struct mp_log *log;
+     struct mp_codec_params *codec;
+@@ -166,6 +192,13 @@ struct priv {
+     int last_dnorm;
+     unsigned last_bed_sig;      // fingerprint of the bed labels (change detection)
+     uint64_t last_latency;      // last engine DSP latency, for change logging
++    /* The engine takes where the listener is (ABI 0.12 `heard_us`) and tells
++     * Studio, which then shows each block when it is heard. */
++    bool heard_supported;
++    struct heard_entry heard_map[HEARD_MAP_LEN]; // ring, newest at head - 1
++    int heard_map_head;
++    int heard_map_len;
++    int64_t heard_last_playing_us;  // the playing pts last reported
+     struct mp_decoder public;
+ };
+ 
+@@ -472,6 +505,59 @@ static void process_host(struct mp_filter *da, struct priv *p)
+     }
+ }
+ 
++/* The engine's timeline restarts (orender_reset): nothing mapped still holds. */
++static void heard_map_clear(struct priv *p)
++{
++    p->heard_map_head = 0;
++    p->heard_map_len = 0;
++    p->heard_last_playing_us = INT64_MIN;
++}
++
++/* Audio stamped `pts` (before the DSP latency shift: the content the engine
++ * decoded there) sits at `pos_us` on the engine's timeline. */
++static void heard_map_note(struct priv *p, double pts, int64_t pos_us)
++{
++    if (!p->heard_supported || pts == MP_NOPTS_VALUE)
++        return;
++    int64_t pts_us = llrint(pts * 1e6);
++    int64_t offset_us = pos_us - pts_us;
++    if (p->heard_map_len > 0) {
++        const struct heard_entry *last =
++            &p->heard_map[(p->heard_map_head + HEARD_MAP_LEN - 1) % HEARD_MAP_LEN];
++        if (llabs(offset_us - last->offset_us) <= HEARD_SLACK_US && pts_us >= last->pts_us)
++            return;
++    }
++    p->heard_map[p->heard_map_head] = (struct heard_entry){pts_us, offset_us};
++    p->heard_map_head = (p->heard_map_head + 1) % HEARD_MAP_LEN;
++    if (p->heard_map_len < HEARD_MAP_LEN)
++        p->heard_map_len++;
++}
++
++/* Tell the engine where the listener is on its timeline: the playing pts,
++ * through the newest mapping that starts at or before it. A pts the map does
++ * not reach yet (the old timeline still playing out after a seek) says
++ * nothing. */
++static void report_heard(struct priv *p)
++{
++    if (!p->heard_supported || !p->renderer)
++        return;
++    int64_t playing = atomic_load_explicit(&playing_pts_us, memory_order_relaxed);
++    if (playing == INT64_MIN || playing == p->heard_last_playing_us)
++        return;
++    for (int n = 1; n <= p->heard_map_len; n++) {
++        const struct heard_entry *e =
++            &p->heard_map[(p->heard_map_head + HEARD_MAP_LEN - n) % HEARD_MAP_LEN];
++        if (e->pts_us > playing)
++            continue;
++        int64_t heard = playing + e->offset_us;
++        char value[24];
++        snprintf(value, sizeof(value), "%" PRId64, heard > 0 ? heard : 0);
++        p->dl->set_option(p->renderer, "heard_us", value);
++        p->heard_last_playing_us = playing;
++        return;
++    }
++}
++
+ /* One call into the engine: the packet when there is one, else a drain call
+  * at end of stream, for what its decode thread still holds. */
+ static int engine_call(struct priv *p, struct demux_packet *mpkt, int64_t pts_us,
+@@ -557,6 +643,8 @@ static void process_spatial(struct mp_filter *da, struct priv *p, bool probe_hos
+     int64_t pts_us = !mpkt || mpkt->pts == MP_NOPTS_VALUE
+                      ? INT64_MIN : (int64_t)llrint(mpkt->pts * 1e6);
+ 
++    report_heard(p);
++
+     int ret = engine_call(p, mpkt, pts_us, samples, capacity,
+                           &n_frames, &n_ch, &out_pts_us);
+     /* A short buffer: the packet is decoded and rendered already, and an engine
+@@ -743,6 +831,11 @@ static void process_spatial(struct mp_filter *da, struct priv *p, bool probe_hos
+                    p->sample_rate > 0 ? latency * 1000.0 / p->sample_rate : 0.0);
+         p->last_latency = latency;
+     }
++    /* Mapped before the shift below: the engine marks a block where it
++     * decoded it, and the listener reaches that block when the content it
++     * decoded there plays, which is this pts. */
++    if (n_frames > 0)
++        heard_map_note(p, pts, out_pts_us);
+     if (latency > 0 && p->sample_rate > 0 && pts != MP_NOPTS_VALUE)
+         pts -= (double)latency / p->sample_rate;
+ 
+@@ -820,6 +913,7 @@ static void ad_orender_process(struct mp_filter *da)
+         if (path == PATH_SPATIAL) {
+             if (p->renderer)
+                 p->dl->reset(p->renderer);
++            heard_map_clear(p);
+             p->checked_spatial = false;
+             p->dl->overlay_set_rendering(1);  // show the spatial overlay again
+             /* A host stint's child ad_lavc overwrote codec_desc/codec_profile
+@@ -852,6 +946,7 @@ static void ad_orender_reset(struct mp_filter *da)
+     struct priv *p = da->priv;
+     if (p->renderer)
+         p->dl->reset(p->renderer);
++    heard_map_clear(p);
+     if (p->native && p->native->f)
+         mp_filter_reset(p->native->f);
+     clear_probe_packets(p);
+@@ -987,6 +1082,16 @@ static struct mp_decoder *create(struct mp_filter *parent,
+                    ? "follows the decode_thread option" : "not offered");
+     }
+ 
++    /* Tell the engine where the listener is, so Studio can follow the sound
++     * (ABI minor >= 12; an older engine answers -1 for the unknown key). The
++     * first report, 0, is right: nothing has been heard yet. */
++    heard_map_clear(p);
++    if (p->renderer && p->dl->have_set_option) {
++        p->heard_supported = p->dl->set_option(p->renderer, "heard_us", "0") == 0;
++        MP_VERBOSE(da, "heard position: %s\n", p->heard_supported
++                   ? "reported to the engine" : "not offered");
++    }
++
+     /* Per-invocation override of the shared config's initial channel render mode.
+      * Option values: 0=auto (follow config), 1=host, 2=spatial (direct/virtual
+      * are legacy aliases of spatial). FFI mode codes: 0=host, 1=spatial — so
+diff --git a/audio/decode/ad_orender.h b/audio/decode/ad_orender.h
+index d9db0d616a..fc9d780dbd 100644
+--- a/audio/decode/ad_orender.h
++++ b/audio/decode/ad_orender.h
+@@ -36,4 +36,12 @@ struct ad_orender_params {
+ 
+ extern const struct m_sub_options ad_orender_conf;
+ 
++/* What the listener is hearing: the pts of the audio the AO is playing now
++ * (playing_audio_pts()), or MP_NOPTS_VALUE when nothing is. Set by the player
++ * each time it feeds the AO; the decoder turns it into the engine's own
++ * timeline and reports it (orender_set_option "heard_us", ABI 0.12), so
++ * Omniphony Studio can show each block of the scene when it is heard rather
++ * than when it was rendered, a whole audio buffer earlier. Thread-safe. */
++void ad_orender_set_playing_pts(double pts);
++
+ #endif
+diff --git a/common/orender_abi.h b/common/orender_abi.h
+index fa1335f6ec..6f452cd949 100644
+--- a/common/orender_abi.h
++++ b/common/orender_abi.h
+@@ -1,7 +1,7 @@
+ /*
+  * Vendored liborender ABI header — copy of orender_ffi/include/orender.h
+- * generated by cbindgen in the Omniphony repo (mgth/Omniphony @ b4cfa561,
+- * ABI 0.11). mpv loads liborender at runtime (see common/orender_dl.[ch]);
++ * generated by cbindgen in the Omniphony repo (mgth/Omniphony @ a1384ecb,
++ * ABI 0.12). mpv loads liborender at runtime (see common/orender_dl.[ch]);
+  * nothing links against these prototypes — they are kept so an accidental
+  * direct call fails at link time instead of compiling silently.
+  *
+@@ -35,7 +35,7 @@
+ // C-ABI minor version: backwards-compatible additions only. Consumers should
+ // gate optional features on symbol presence (dlsym), not on this value; it
+ // exists for logging and diagnostics.
+-#define ORENDER_ABI_MINOR 11
++#define ORENDER_ABI_MINOR 12
+ 
+ // Speaker-position labels written by `orender_channel_layout` and
+ // `orender_bed_layout` (one byte per channel). Mirrors the engine's
+@@ -451,6 +451,13 @@ const char *orender_build_id(void);
+ //   `render.decode_thread` option (config.yaml, Studio, OSC), which the
+ //   engine then follows at packet boundaries, winding the thread down a
+ //   packet per call when it is turned off mid-stream.
++// - `heard_us` = a decimal integer (ABI 0.12): where the listener is, in the
++//   microseconds `*out_pts_us` counts — so from 0 after `orender_reset`. A
++//   host that buffers the rendered audio plays it later than it renders it;
++//   reported as the audio plays, it reaches OSC clients as
++//   `/omniphony/playout/heard`, so a client such as Studio can show each block
++//   when it is heard rather than when it was rendered. The engine holds
++//   nothing back. A host that never sets it changes nothing.
+ int orender_set_option(struct OrenderRenderer *r, const char *key, const char *value);
+ 
+ #ifdef __cplusplus
+diff --git a/player/audio.c b/player/audio.c
+index 7dc19158c9..8e23785374 100644
+--- a/player/audio.c
++++ b/player/audio.c
+@@ -22,6 +22,7 @@
+ #include <math.h>
+ #include <assert.h>
+ 
++#include "config.h"
+ #include "mpv_talloc.h"
+ 
+ #include "common/msg.h"
+@@ -39,6 +40,9 @@
+ 
+ #include "core.h"
+ #include "command.h"
++#if HAVE_ORENDER
++#include "audio/decode/ad_orender.h"
++#endif
+ 
+ enum {
+     AD_OK = 0,
+@@ -875,6 +879,12 @@ void fill_audio_out_buffers(struct MPContext *mpctx)
+ 
+     update_throttle(mpctx);
+ 
++#if HAVE_ORENDER
++    // Where the listener is, for the Omniphony engine to tell Studio.
++    ad_orender_set_playing_pts(mpctx->audio_status == STATUS_PLAYING
++                               ? playing_audio_pts(mpctx) : MP_NOPTS_VALUE);
++#endif
++
+     struct ao_chain *ao_c = mpctx->ao_chain;
+     if (!ao_c)
+         return;

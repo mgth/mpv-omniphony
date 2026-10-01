@@ -38,7 +38,8 @@ fi
 mkdir -p "$REPO_ROOT/patches-master"
 echo ">> generating patches from ${BASE_REF}..${SRC_BRANCH} in $FORK"
 # 9xxx-*.patch are MANUAL patches with no fork-commit counterpart (they target
-# upstream code the fork base predates, e.g. 9001-f_swresample-force-identity).
+# upstream code the fork base predates). Drop one once upstream master has made
+# it obsolete, or it stops applying and breaks the live-master build.
 # They apply last (lexicographic glob in apply-patches-master.sh) and must
 # survive regeneration — only the format-patch-generated series is wiped.
 find "$REPO_ROOT/patches-master" -maxdepth 1 -name '*.patch' \

@@ -1,0 +1,217 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mathieu GRENET <mathieu@mgth.fr>
+Date: Tue, 29 Sep 2026 08:14:50 +0200
+Subject: [PATCH 33/40] ad_orender: retry a packet on a short buffer instead of
+ dropping it
+
+orender_process decodes a packet before it knows whether the output fits,
+so until now a ">0: buffer too small" return lost the packet: calling it
+again would have decoded the same bytes a second time and advanced the
+bridge twice. Since Omniphony #570 the engine keeps the rendered audio on
+a short buffer and hands it back when called again with the same packet,
+without touching the decoder.
+
+So grow the scratch and call again: to the width the renderer reports
+now, when an output-mode switch landed inside the call, else to twice
+the frames per packet. Both stay raised, so a stream costs one retry the
+first time and none after. Up to four retries, then the packet is dropped
+as before.
+
+The retry is gated on ABI minor >= 10, the first version that carries
+#570; an older engine would decode the packet twice, so it keeps the
+old drop. The vendored header moves to ABI 0.10 (mgth/Omniphony@6c90ea50),
+which documents the retry contract.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit e944cde25c5cd946a0d0bcbb0bcc9e59d6bbb83a)
+---
+ audio/decode/ad_orender.c | 55 +++++++++++++++++++++++++++++++--------
+ common/orender_abi.h      | 55 ++++++++++++++++++++++++++++++++++-----
+ 2 files changed, 93 insertions(+), 17 deletions(-)
+
+diff --git a/audio/decode/ad_orender.c b/audio/decode/ad_orender.c
+index 9d785c646b..9412ee2eb1 100644
+--- a/audio/decode/ad_orender.c
++++ b/audio/decode/ad_orender.c
+@@ -92,6 +92,10 @@ static const char *nz(const char *s) { return (s && s[0]) ? s : NULL; }
+ enum { HOST_DEC_LAVC = 0, HOST_DEC_SPDIF = 1 };
+ enum { PATH_NONE = -1, PATH_HOST = 0, PATH_SPATIAL = 1 };
+ 
++/* Output scratch: frames per packet it starts sized for, and how many times a
++ * short one is grown and the packet retried before it is dropped. */
++enum { SCRATCH_FRAMES = 4096, SCRATCH_RETRIES = 4 };
++
+ struct priv {
+     struct mp_log *log;
+     struct mp_codec_params *codec;
+@@ -111,6 +115,10 @@ struct priv {
+      * frame. That returned "buffer too small" and we dropped the packet —
+      * audible as a plop on the switch. */
+     int scratch_ch_hwm;
++    /* Frames per packet the scratch holds (0 = SCRATCH_FRAMES). Doubled when a
++     * packet still does not fit at the widest layout, and kept, so a stream
++     * with longer packets costs one retry once, not one per packet. */
++    int scratch_frames;
+     bool source_spatial;        // container/bridge identified object content
+     bool source_classified;     // first decoded presentation has been inspected
+     bool force_host;            // engine unusable (no layout / create failed): always native
+@@ -498,7 +506,9 @@ static void process_spatial(struct mp_filter *da, struct priv *p, bool probe_hos
+     /* Never shrink back to the current mode's width — see scratch_ch_hwm. */
+     if (ch > p->scratch_ch_hwm)
+         p->scratch_ch_hwm = ch;
+-    size_t capacity = (size_t)4096 * (size_t)p->scratch_ch_hwm;
++    if (p->scratch_frames <= 0)
++        p->scratch_frames = SCRATCH_FRAMES;
++    size_t capacity = (size_t)p->scratch_frames * (size_t)p->scratch_ch_hwm;
+     float *samples = talloc_array(NULL, float, capacity);
+ 
+     uintptr_t n_frames = 0;
+@@ -509,22 +519,45 @@ static void process_spatial(struct mp_filter *da, struct priv *p, bool probe_hos
+     int ret = p->dl->process(p->renderer, mpkt->buffer, mpkt->len, pts_us,
+                              samples, capacity,
+                              &n_frames, &n_ch, &out_pts_us);
++    /* A short buffer: the packet is decoded and rendered already, and an engine
++     * from ABI 0.10 on (Omniphony #570) holds that audio and hands it back when
++     * called again with the same packet, without decoding it a second time.
++     * Grow the scratch and retry: to the width the renderer reports now (an
++     * output-mode switch landing inside the call), else to twice the frames.
++     * Both stay raised, so this costs a retry the first time, not every packet.
++     * Older engines would decode the packet again and advance the bridge
++     * twice, so for them the packet is dropped, as before. */
++    for (int attempt = 0; ret > 0 && attempt < SCRATCH_RETRIES; attempt++) {
++        uint32_t now_ch = p->dl->channel_count(p->renderer);
++        if (p->dl->abi_minor < 10) {
++            if (now_ch > 0 && now_ch <= MP_NUM_CHANNELS && (int)now_ch > p->scratch_ch_hwm)
++                p->scratch_ch_hwm = (int)now_ch;
++            break;
++        }
++        if (now_ch > 0 && now_ch <= MP_NUM_CHANNELS && (int)now_ch > p->scratch_ch_hwm) {
++            p->scratch_ch_hwm = (int)now_ch;
++        } else {
++            p->scratch_frames *= 2;
++        }
++        MP_VERBOSE(da, "orender output buffer too small (%zu floats); retrying "
++                       "with %d frames x %d ch\n", capacity, p->scratch_frames,
++                   p->scratch_ch_hwm);
++        capacity = (size_t)p->scratch_frames * (size_t)p->scratch_ch_hwm;
++        talloc_free(samples);
++        samples = talloc_array(NULL, float, capacity);
++        ret = p->dl->process(p->renderer, mpkt->buffer, mpkt->len, pts_us,
++                             samples, capacity,
++                             &n_frames, &n_ch, &out_pts_us);
++    }
+     if (ret < 0) {
+         MP_ERR(da, "orender_process error %d\n", ret);
+         failed = true;
+         goto done;
+     }
+     if (ret > 0) {
+-        /* Retrying is not possible: orender_process has already decoded this
+-         * packet by the time it finds the buffer short, so calling again would
+-         * advance the bridge twice. Raise the mark to the width the renderer
+-         * reports now, so this costs one packet the first time a stream widens
+-         * and nothing on later switches. */
+-        uint32_t now_ch = p->dl->channel_count(p->renderer);
+-        if (now_ch > 0 && now_ch <= MP_NUM_CHANNELS && (int)now_ch > p->scratch_ch_hwm)
+-            p->scratch_ch_hwm = (int)now_ch;
+-        MP_WARN(da, "orender output buffer too small (sized for %d ch, renderer "
+-                    "reports %u ch); dropping packet\n", ch, now_ch);
++        MP_WARN(da, "orender output buffer too small (%zu floats, renderer "
++                    "reports %u ch); dropping packet\n", capacity,
++                p->dl->channel_count(p->renderer));
+         goto done;
+     }
+ 
+diff --git a/common/orender_abi.h b/common/orender_abi.h
+index d6d1b5413e..0bcd0aa5ff 100644
+--- a/common/orender_abi.h
++++ b/common/orender_abi.h
+@@ -1,7 +1,7 @@
+ /*
+  * Vendored liborender ABI header — copy of orender_ffi/include/orender.h
+- * generated by cbindgen in the Omniphony repo (mgth/Omniphony @ 8ce9a133,
+- * ABI 0.9). mpv loads liborender at runtime (see common/orender_dl.[ch]);
++ * generated by cbindgen in the Omniphony repo (mgth/Omniphony @ 6c90ea50,
++ * ABI 0.10). mpv loads liborender at runtime (see common/orender_dl.[ch]);
+  * nothing links against these prototypes — they are kept so an accidental
+  * direct call fails at link time instead of compiling silently.
+  *
+@@ -35,7 +35,7 @@
+ // C-ABI minor version: backwards-compatible additions only. Consumers should
+ // gate optional features on symbol presence (dlsym), not on this value; it
+ // exists for logging and diagnostics.
+-#define ORENDER_ABI_MINOR 9
++#define ORENDER_ABI_MINOR 10
+ 
+ // Speaker-position labels written by [`orender_channel_layout`] and
+ // [`orender_bed_layout`] (one byte per channel). Mirrors the engine's
+@@ -247,7 +247,18 @@ void orender_reset(struct OrenderRenderer *r);
+ // `*out_channels` / `*out_pts_us` are set.
+ //
+ // Returns: 0 = OK (may be 0 frames — need more data), >0 = output buffer too
+-// small (nothing written; retry with a larger buffer), <0 = error.
++// small (nothing written; call again with the same packet and a larger
++// buffer), <0 = error.
++//
++// The packet is decoded before its size is known, so a >0 return keeps the
++// rendered audio and the retry hands it back without decoding the packet a
++// second time. A host that moves on to the next packet instead loses this
++// packet's audio, but the stream stays in step.
++//
++// With the `decode_thread` option on (see [`orender_set_option`]) a packet's
++// audio comes back from a later call - one packet's per call, about 30 ms of
++// audio behind, or one packet if that is longer - or from [`orender_drain`]:
++// take the timestamps from `*out_pts_us`, and drain at end of stream.
+ int orender_process(struct OrenderRenderer *r,
+                     const uint8_t *pkt,
+                     uintptr_t pkt_len,
+@@ -258,6 +269,28 @@ int orender_process(struct OrenderRenderer *r,
+                     uint32_t *out_channels,
+                     int64_t *out_pts_us);
+ 
++// Render what the engine still holds, because the stream is over: with the
++// `decode_thread` option on, the packets it has been handed and not returned
++// yet. One packet's audio per call, as [`orender_process`] returns it, so a
++// buffer that fits one packet's audio fits a drain too: after the last packet,
++// call it until it returns 0 frames, and play what each call returns.
++//
++// Not a reset: the renderer keeps its state, because this audio continues
++// what came before. Once it has returned 0 frames it keeps returning 0 until
++// new input. `out` and the out-parameters are as for [`orender_process`].
++//
++// Returns: 0 = OK (0 frames: nothing is left), >0 = output buffer too small
++// (nothing written; call drain again with a larger buffer before sending
++// more input — the audio is kept for it, and [`orender_process`] refuses
++// input until it has been collected), <0 = error. [`orender_reset`]
++// discards it.
++int orender_drain(struct OrenderRenderer *r,
++                  float *out,
++                  uintptr_t out_cap_samples,
++                  uintptr_t *out_frames,
++                  uint32_t *out_channels,
++                  int64_t *out_pts_us);
++
+ // Render the spatial overlay for the given OSD resolution and copy the ASS
+ // `osd-overlay` payload into `out` (UTF-8, not nul-terminated).
+ //
+@@ -364,8 +397,18 @@ const char *orender_build_id(void);
+ // whether this build supports a key), -2 for an invalid value, -3 on a NULL
+ // handle/argument or internal error.
+ //
+-// No keys are defined at ABI 0.5 — every call returns -1. The mechanism ships
+-// ahead of the first key so consumers can adopt the probe pattern now.
++// Keys:
++//
++// - `decode_thread` = `on` | `off` (ABI 0.10; default `off`): decode on a
++//   thread of its own, overlapping the render, so the two share the work
++//   across two cores. With it on, a packet's audio comes back from a later
++//   [`orender_process`] call (one packet's per call, about 30 ms of audio
++//   behind, or one packet if that is longer) or from [`orender_drain`], so
++//   only a host that takes its timestamps from `*out_pts_us` and drains at
++//   end of stream should turn it on. Switch it while nothing is in flight:
++//   right after [`orender_create`], after [`orender_reset`], or once
++//   [`orender_drain`] has returned 0 frames; turning it off with packets
++//   still on the thread returns -2.
+ int orender_set_option(struct OrenderRenderer *r, const char *key, const char *value);
+ 
+ #endif  /* ORENDER_H */

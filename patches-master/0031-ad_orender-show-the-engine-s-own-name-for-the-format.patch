@@ -1,0 +1,188 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mathieu GRENET <mathieu@mgth.fr>
+Date: Mon, 21 Sep 2026 10:51:49 +0200
+Subject: [PATCH 31/40] ad_orender: show the engine's own name for the format
+ (ABI 0.9)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A DTS:X track with fixed heights and no objects, and an Auro-3D carrier,
+both read "DTS" in the track information: the profile was composed from
+the codec id and the object count alone. liborender 0.9 exports the
+bridge's name for what it decodes (orender_source_label, from
+mgth/Omniphony#560); use it as the profile's base when present —
+"DTS-HD MA + DTS:X 7.1.4", "DTS-HD MA + Auro-3D 11.1", "DTS-HD HRA",
+"Dolby TrueHD + Dolby Atmos" — keeping the bed/objects and DialNorm
+suffixes, and the codec-id rule for older engines (optional symbol, the
+stub reports none). The label is part of the change fingerprint, so a
+name change with the same object count republishes the profile.
+
+Vendored ABI header synced to mgth/Omniphony@001be69d (ABI 0.9).
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+(cherry picked from commit d6b943ad63a573fc61e6768e1c3e9456057d6fc6)
+---
+ audio/decode/ad_orender.c | 27 +++++++++++++++++++++------
+ common/orender_abi.h      | 21 ++++++++++++++++++---
+ common/orender_dl.c       |  4 ++++
+ common/orender_dl.h       |  8 ++++++++
+ 4 files changed, 51 insertions(+), 9 deletions(-)
+
+diff --git a/audio/decode/ad_orender.c b/audio/decode/ad_orender.c
+index 05a5dfae8c..9d785c646b 100644
+--- a/audio/decode/ad_orender.c
++++ b/audio/decode/ad_orender.c
+@@ -227,7 +227,10 @@ static const char *label_to_short_name(uint8_t lbl)
+  * mirrors what ffmpeg reports on the native path so shift+I reads the same.
+  * `has_objects` reflects the actually-decoded object presence (object_count > 0),
+  * not the bridge's pre-decode "may be spatial" flag — a plain multichannel
+- * TrueHD/E-AC3 stream carries no objects and must not be labelled Atmos. */
++ * TrueHD/E-AC3 stream carries no objects and must not be labelled Atmos.
++ * The fallback for engines predating orender_source_label (ABI minor < 9):
++ * it cannot tell a fixed-height DTS:X or an Auro-3D layer from plain DTS,
++ * which is exactly what the engine's own label adds. */
+ static const char *profile_base(const char *codec, bool has_objects)
+ {
+     if (strcmp(codec, "truehd") == 0)
+@@ -274,13 +277,23 @@ static void refresh_codec_profile(struct priv *p)
+     int objs    = p->dl->object_count(p->renderer);  // >=0 / -1
+     int dnorm   = p->dl->dialnorm_db(p->renderer);   // <=0 / INT32_MIN (unknown)
+ 
++    /* The engine's own name for what it decodes — "DTS-HD MA + DTS:X 7.1.4",
++     * "DTS-HD MA + Auro-3D 11.1", "Dolby TrueHD + Dolby Atmos" (ABI minor
++     * >= 9; older engines report 0 and leave the buffer alone). A name too
++     * long for the buffer is not written either, so it reads as none. */
++    char label[96];
++    label[0] = '\0';
++    p->dl->source_label(p->renderer, label, sizeof(label));
++
+     uint8_t bed[MP_NUM_CHANNELS];
+     uint32_t bedn = p->dl->bed_layout(p->renderer, bed, MP_NUM_CHANNELS);
+-    /* FNV-1a fingerprint of the bed labels, so a bed change (same object count)
+-     * still triggers a rebuild. */
++    /* FNV-1a fingerprint of the bed labels and the engine's label, so a bed
++     * or label change (same object count) still triggers a rebuild. */
+     unsigned bed_sig = 2166136261u;
+     for (uint32_t i = 0; i < bedn; i++)
+         bed_sig = (bed_sig ^ bed[i]) * 16777619u;
++    for (const char *c = label; *c; c++)
++        bed_sig = (bed_sig ^ (uint8_t)*c) * 16777619u;
+ 
+     if (objs == p->last_objs && dnorm == p->last_dnorm &&
+         bed_sig == p->last_bed_sig)
+@@ -297,7 +310,8 @@ static void refresh_codec_profile(struct priv *p)
+     char *buf = p->profile_buf[slot];
+     size_t cap = sizeof(p->profile_buf[slot]);
+ 
+-    int n = snprintf(buf, cap, "%s", profile_base(p->codec->codec, objs > 0));
++    int n = snprintf(buf, cap, "%s",
++                     label[0] ? label : profile_base(p->codec->codec, objs > 0));
+     /* "· <bed labels>+<N> objects", e.g. "· LFE+11 objects" (no bed → "· N
+      * objects"). Only when there are objects (plain multichannel reports 0). */
+     if (objs > 0 && n > 0 && (size_t)n < cap) {
+@@ -623,8 +637,9 @@ static void process_spatial(struct mp_filter *da, struct priv *p, bool probe_hos
+     }
+ 
+     /* Now that a real frame has decoded, the engine knows the presentation's
+-     * Atmos flag, object count and DialNorm — surface them as the track's codec
+-     * profile so shift+I matches the native path (and adds objects + DialNorm). */
++     * name (or Atmos flag), object count and DialNorm — surface them as the
++     * track's codec profile so shift+I matches the native path (and adds
++     * objects + DialNorm). */
+     refresh_codec_profile(p);
+ 
+     /* Compensate the engine's constant DSP latency (ABI minor >= 7; the stub
+diff --git a/common/orender_abi.h b/common/orender_abi.h
+index 99274f4d67..8445768f1d 100644
+--- a/common/orender_abi.h
++++ b/common/orender_abi.h
+@@ -1,7 +1,7 @@
+ /*
+  * Vendored liborender ABI header — copy of orender_ffi/include/orender.h
+- * generated by cbindgen in the Omniphony repo (mgth/Omniphony @ 91ccf00f,
+- * ABI 0.8). mpv loads liborender at runtime (see common/orender_dl.[ch]);
++ * generated by cbindgen in the Omniphony repo (mgth/Omniphony @ 001be69d,
++ * ABI 0.9). mpv loads liborender at runtime (see common/orender_dl.[ch]);
+  * nothing links against these prototypes — they are kept so an accidental
+  * direct call fails at link time instead of compiling silently.
+  *
+@@ -35,7 +35,7 @@
+ // C-ABI minor version: backwards-compatible additions only. Consumers should
+ // gate optional features on symbol presence (dlsym), not on this value; it
+ // exists for logging and diagnostics.
+-#define ORENDER_ABI_MINOR 8
++#define ORENDER_ABI_MINOR 9
+ 
+ // Speaker-position labels written by [`orender_channel_layout`] and
+ // [`orender_bed_layout`] (one byte per channel). Mirrors the engine's
+@@ -174,6 +174,21 @@ int orender_dialnorm_db(const struct OrenderRenderer *r);
+ // query `N`). `0` for plain multichannel / no bed / NULL handle / error.
+ uint32_t orender_bed_layout(const struct OrenderRenderer *r, uint8_t *out_labels, uint32_t cap);
+ 
++// Write the name the bridge gives the current presentation's format, as a
++// NUL-terminated UTF-8 string — `DTS-HD MA + DTS:X 7.1.4`,
++// `DTS-HD MA + Auro-3D 11.1`, `Dolby TrueHD + Dolby Atmos`, `Dolby Digital
++// Plus` — for the host's track info display. Declaration-level: it follows
++// the channel labels (a lossy carrier whose spatial layer the bridge cannot
++// read is named as the carrier alone), so poll it with the other track-info
++// queries rather than latching it.
++//
++// Query/fill convention: returns the label's length `N` in bytes (without the
++// terminator); if `out` is non-NULL and `cap > N`, the label and its NUL are
++// written (else nothing is written — call with `out = NULL` to query `N`).
++// `0` when the bridge states no name (the host composes its own), and on a
++// NULL handle / error.
++uint32_t orender_source_label(const struct OrenderRenderer *r, char *out, uint32_t cap);
++
+ // Constant DSP latency of the rendered output, in samples at the engine
+ // sample rate: PCM fed to [`orender_process`] emerges this many samples later
+ // in the rendered stream. 0 for the default filters; non-zero when the
+diff --git a/common/orender_dl.c b/common/orender_dl.c
+index 97950d40e1..2e48d1caee 100644
+--- a/common/orender_dl.c
++++ b/common/orender_dl.c
+@@ -82,6 +82,8 @@ static uint64_t stub_output_latency_samples(const struct OrenderRenderer *r)
+ {
+     return 0;
+ }
++static uint32_t stub_source_label(const struct OrenderRenderer *r, char *out,
++                                  uint32_t cap) { return 0; }
+ static int stub_set_option(struct OrenderRenderer *r, const char *key,
+                            const char *value) { return -1; }
+ static const char *stub_build_id(void) { return NULL; }
+@@ -138,6 +140,7 @@ static const struct orender_dl stubs = {
+     .bed_layout = stub_layout,
+     .has_objects = stub_has_objects,
+     .output_latency_samples = stub_output_latency_samples,
++    .source_label = stub_source_label,
+     .set_option = stub_set_option,
+     .build_id = stub_build_id,
+     .overlay_set_rendering = stub_overlay_set_rendering,
+@@ -300,6 +303,7 @@ static bool try_load(struct mp_log *log, const char *path, const char *origin)
+         OPT_SYM(has_objects,           "orender_is_spatial"),
+         OPT_SYM(has_objects,           "orender_has_objects"),
+         OPT_SYM(output_latency_samples, "orender_output_latency_samples"),
++        OPT_SYM(source_label,          "orender_source_label"),
+         OPT_SYM(set_option,            "orender_set_option"),
+         OPT_SYM(build_id,              "orender_build_id"),
+         OPT_SYM(overlay_set_rendering, "orender_overlay_set_rendering"),
+diff --git a/common/orender_dl.h b/common/orender_dl.h
+index 75147e639d..f20f3c1acf 100644
+--- a/common/orender_dl.h
++++ b/common/orender_dl.h
+@@ -67,6 +67,14 @@ struct orender_dl {
+      * The decoder subtracts latency/sample_rate from output PTS so mpv keeps
+      * A/V sync. */
+     uint64_t (*output_latency_samples)(const struct OrenderRenderer *r);
++    /* The engine's own name for the presentation's format — "DTS-HD MA +
++     * DTS:X 7.1.4", "DTS-HD MA + Auro-3D 11.1", "Dolby TrueHD + Dolby
++     * Atmos" — NUL-terminated into `out` when `cap` exceeds its length;
++     * returns that length, 0 when the bridge states none (ABI minor >= 9;
++     * the stub reports 0). Follows the channel labels, so poll it with the
++     * other track-info queries. */
++    uint32_t (*source_label)(const struct OrenderRenderer *r, char *out,
++                             uint32_t cap);
+     int (*set_option)(struct OrenderRenderer *r, const char *key,
+                       const char *value);
+     const char *(*build_id)(void);
