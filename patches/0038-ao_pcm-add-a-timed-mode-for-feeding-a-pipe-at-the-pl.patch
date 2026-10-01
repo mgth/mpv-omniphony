@@ -1,0 +1,215 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mathieu GRENET <mathieu@mgth.fr>
+Date: Thu, 1 Oct 2026 15:44:54 +0200
+Subject: [PATCH 38/40] ao_pcm: add a timed mode for feeding a pipe at the
+ player's pace
+
+--ao-pcm-timed=yes makes the PCM writer behave as an audio device that
+plays at the nominal rate on mpv's clock: a virtual buffer of
+--ao-pcm-buffer seconds (default 40 ms) drains on mp_time, mpv writes as
+it frees up (every quarter of it), and each write is flushed at once.
+Audio is then paced like any sound card output and video syncs to it,
+instead of the untimed writer that runs as fast as the player throttles
+it.
+
+The reported delay is --ao-pcm-latency: the time from writing a sample
+to hearing it, as the reader on the other end of the pipe holds it (for
+orender's sync host, its target latency). It counts down between writes.
+
+Measured against orender's sync host on a FIFO (E-AC-3 over IEC 61937):
+arrival lateness p99 drops from 68 ms (untimed) to 0.04 ms, writes come
+every 10.06 ms, and the latency holds from the first callback with no
+start-up realign.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ DOCS/man/ao.rst    | 14 +++++++
+ audio/out/ao_pcm.c | 93 ++++++++++++++++++++++++++++++++++++++++++----
+ 2 files changed, 100 insertions(+), 7 deletions(-)
+
+diff --git a/DOCS/man/ao.rst b/DOCS/man/ao.rst
+index 7eb7c97d6b..2eab06fa0a 100644
+--- a/DOCS/man/ao.rst
++++ b/DOCS/man/ao.rst
+@@ -297,6 +297,20 @@ Available audio output drivers are:
+         Append to the file, instead of overwriting it. Always use this with the
+         ``no-waveheader`` option - with ``waveheader`` it's broken, because
+         it will write a WAVE header every time the file is opened.
++    ``--ao-pcm-timed=<yes|no>``
++        Play at the nominal rate on the system clock instead of as fast as the
++        player allows (default: no). The output then behaves as an audio
++        device: mpv paces the audio, and video syncs to it, as it would with a
++        sound card. Use it to feed a renderer reading a pipe that adapts to
++        the writer's clock.
++    ``--ao-pcm-buffer=<seconds>``
++        With ``timed``, the length of the virtual device buffer (default:
++        0.04). mpv writes when a quarter of it has played, so a smaller buffer
++        means smaller, more regular writes.
++    ``--ao-pcm-latency=<seconds>``
++        With ``timed``, the time from writing a sample to hearing it, as the
++        reader on the other end of the pipe holds it (default: 0, meaning the
++        buffer alone). mpv uses it for A/V sync.
+ 
+ ``sndio``
+     Audio output to the OpenBSD sndio sound system
+diff --git a/audio/out/ao_pcm.c b/audio/out/ao_pcm.c
+index ce55e70f03..ed7d806834 100644
+--- a/audio/out/ao_pcm.c
++++ b/audio/out/ao_pcm.c
+@@ -22,6 +22,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <math.h>
+ 
+ #include <libavutil/common.h>
+ 
+@@ -33,6 +34,7 @@
+ #include "ao.h"
+ #include "internal.h"
+ #include "common/msg.h"
++#include "osdep/timer.h"
+ #include "osdep/endian.h"
+ 
+ #ifdef _WIN32
+@@ -47,6 +49,18 @@ struct priv {
+     bool append;
+     uint64_t data_length;
+     FILE *fp;
++
++    // Timed mode: the output behaves as a device that plays at the nominal
++    // rate on the system clock. Writes still go out at once, but only as
++    // fast as a virtual buffer of `buffer_sec` drains, so a reader on the
++    // other end of a pipe sees the stream at the pace of mpv's clock.
++    bool timed;
++    float buffer_sec;   // virtual buffer length
++    float latency_sec;  // write-to-speaker time reported to the player
++    double buffered;    // samples in the virtual buffer
++    double last_time;
++    bool paused;
++    bool playing;
+ };
+ 
+ #define WAV_ID_RIFF 0x46464952 /* "RIFF" */
+@@ -160,8 +174,16 @@ static int init(struct ao *ao)
+     }
+     if (priv->waveheader)  // Reserve space for wave header
+         write_wave_header(ao, priv->fp, 0x7ffff000);
+-    ao->untimed = true;
+-    ao->device_buffer = 1 << 16;
++    if (priv->timed) {
++        ao->untimed = false;
++        ao->device_buffer = MPMAX(1, lrint(priv->buffer_sec * ao->samplerate));
++        priv->last_time = mp_time_sec();
++        MP_INFO(ao, "Timed: buffer %.0f ms, latency %.0f ms\n",
++                priv->buffer_sec * 1e3, priv->latency_sec * 1e3);
++    } else {
++        ao->untimed = true;
++        ao->device_buffer = 1 << 16;
++    }
+ 
+     return 0;
+ }
+@@ -201,28 +223,79 @@ static bool audio_write(struct ao *ao, void **data, int samples)
+     fwrite(data[0], len, 1, priv->fp);
+     priv->data_length += len;
+ 
++    if (priv->timed) {
++        // A reader on a pipe must see the bytes when the virtual device
++        // takes them, not when stdio's buffer happens to fill.
++        fflush(priv->fp);
++        priv->buffered += samples;
++    }
++
+     return true;
+ }
+ 
++// Timed mode: play out the virtual buffer up to now.
++static void drain(struct ao *ao)
++{
++    struct priv *priv = ao->priv;
++    double now = mp_time_sec();
++    if (priv->playing && !priv->paused) {
++        priv->buffered -= (now - priv->last_time) * ao->samplerate;
++        if (priv->buffered < 0)
++            priv->buffered = 0;
++    }
++    priv->last_time = now;
++}
++
+ static void get_state(struct ao *ao, struct mp_pcm_state *state)
+ {
+-    state->free_samples = ao->device_buffer;
+-    state->queued_samples = 0;
+-    state->delay = 0;
++    struct priv *priv = ao->priv;
++
++    if (!priv->timed) {
++        state->free_samples = ao->device_buffer;
++        state->queued_samples = 0;
++        state->delay = 0;
++        return;
++    }
++
++    drain(ao);
++    state->free_samples = MPMAX(0, ao->device_buffer - (int)ceil(priv->buffered));
++    state->queued_samples = priv->buffered;
++    // The newest sample was written when the buffer was last full, and is
++    // heard `latency` after that write: the delay counts down from there.
++    // Without a latency the virtual buffer is the whole delay.
++    double full = ao->device_buffer / (double)ao->samplerate;
++    double latency = MPMAX(priv->latency_sec, full);
++    state->delay = MPMAX(0, latency - (full - priv->buffered / ao->samplerate));
++    state->playing = priv->playing && priv->buffered > 0;
+ }
+ 
+ static bool set_pause(struct ao *ao, bool paused)
+ {
++    struct priv *priv = ao->priv;
++    if (priv->timed && priv->paused != paused) {
++        drain(ao);
++        priv->paused = paused;
++    }
+     return true; // signal support so common code doesn't write silence
+ }
+ 
+ static void start(struct ao *ao)
+ {
+-    // we use data immediately
++    struct priv *priv = ao->priv;
++    if (priv->timed) {
++        priv->paused = false;
++        priv->playing = true;
++        priv->last_time = mp_time_sec();
++    }
+ }
+ 
+ static void reset(struct ao *ao)
+ {
++    struct priv *priv = ao->priv;
++    // What was written is gone: only the virtual buffer can be dropped.
++    priv->buffered = 0;
++    priv->paused = false;
++    priv->playing = false;
+ }
+ 
+ #define OPT_BASE_STRUCT struct priv
+@@ -238,11 +311,17 @@ const struct ao_driver audio_out_pcm = {
+     .start     = start,
+     .reset     = reset,
+     .priv_size = sizeof(struct priv),
+-    .priv_defaults = &(const struct priv) { .waveheader = true },
++    .priv_defaults = &(const struct priv) {
++        .waveheader = true,
++        .buffer_sec = 0.04,
++    },
+     .options = (const struct m_option[]) {
+         {"file", OPT_STRING(outputfilename), .flags = M_OPT_FILE},
+         {"waveheader", OPT_BOOL(waveheader)},
+         {"append", OPT_BOOL(append)},
++        {"timed", OPT_BOOL(timed)},
++        {"buffer", OPT_FLOAT(buffer_sec), M_RANGE(0.001, 2)},
++        {"latency", OPT_FLOAT(latency_sec), M_RANGE(0, 10)},
+         {0}
+     },
+     .options_prefix = "ao-pcm",

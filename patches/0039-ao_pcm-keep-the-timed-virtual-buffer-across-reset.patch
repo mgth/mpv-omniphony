@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mathieu GRENET <mathieu@mgth.fr>
+Date: Thu, 1 Oct 2026 16:18:34 +0200
+Subject: [PATCH 39/40] ao_pcm: keep the timed virtual buffer across reset
+
+What was written to a pipe cannot be taken back: the reader plays it
+out. Emptying the virtual buffer on reset made mpv refill it at once
+after every seek, a ~20 ms step ahead in the arrivals that the reader
+had to absorb. The buffer now keeps draining on mp_time whether or not
+the player counts the AO as playing, so a seek is continuous for the
+reader and the delay accounts for the old audio still ahead of the new.
+start() drains instead of restarting the clock.
+
+Live against orender's sync host: seeks of +60, -30 and +2 s pass with
+no realign and a latency error under 0.015 ms; mpv's avsync settles from
+-8 ms within ~2 s.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ audio/out/ao_pcm.c | 15 ++++++++++-----
+ 1 file changed, 10 insertions(+), 5 deletions(-)
+
+diff --git a/audio/out/ao_pcm.c b/audio/out/ao_pcm.c
+index ed7d806834..7b3da2ff06 100644
+--- a/audio/out/ao_pcm.c
++++ b/audio/out/ao_pcm.c
+@@ -233,12 +233,13 @@ static bool audio_write(struct ao *ao, void **data, int samples)
+     return true;
+ }
+ 
+-// Timed mode: play out the virtual buffer up to now.
++// Timed mode: play out the virtual buffer up to now. It drains whether or
++// not the player counts the AO as playing: what was written has left.
+ static void drain(struct ao *ao)
+ {
+     struct priv *priv = ao->priv;
+     double now = mp_time_sec();
+-    if (priv->playing && !priv->paused) {
++    if (!priv->paused) {
+         priv->buffered -= (now - priv->last_time) * ao->samplerate;
+         if (priv->buffered < 0)
+             priv->buffered = 0;
+@@ -283,17 +284,21 @@ static void start(struct ao *ao)
+ {
+     struct priv *priv = ao->priv;
+     if (priv->timed) {
++        drain(ao);
+         priv->paused = false;
+         priv->playing = true;
+-        priv->last_time = mp_time_sec();
+     }
+ }
+ 
+ static void reset(struct ao *ao)
+ {
+     struct priv *priv = ao->priv;
+-    // What was written is gone: only the virtual buffer can be dropped.
+-    priv->buffered = 0;
++    // What was written cannot be taken back: the reader plays it out. So a
++    // seek keeps the virtual buffer and its clock, the writes after it go on
++    // at the same pace, and the delay accounts for the old audio still ahead
++    // of the new.
++    if (priv->timed)
++        drain(ao);
+     priv->paused = false;
+     priv->playing = false;
+ }

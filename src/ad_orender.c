@@ -25,8 +25,12 @@
  * YAML (render.bridge_path), resolved by liborender when the config path is NULL.
  */
 
+#include <inttypes.h>
+#include <math.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include <libavcodec/avcodec.h>
@@ -92,6 +96,33 @@ static const char *nz(const char *s) { return (s && s[0]) ? s : NULL; }
 enum { HOST_DEC_LAVC = 0, HOST_DEC_SPDIF = 1 };
 enum { PATH_NONE = -1, PATH_HOST = 0, PATH_SPATIAL = 1 };
 
+/* Output scratch: frames per packet it starts sized for, and how many times a
+ * short one is grown and the packet retried before it is dropped. */
+enum { SCRATCH_FRAMES = 4096, SCRATCH_RETRIES = 4 };
+
+/* Where the listener is, in demuxer-timestamp microseconds (INT64_MIN: not
+ * playing). Written by the player as it feeds the AO, read by the decoder,
+ * which may run on another thread. Process-wide: there is one AO. */
+static atomic_int_least64_t playing_pts_us = INT64_MIN;
+
+void ad_orender_set_playing_pts(double pts)
+{
+    atomic_store_explicit(&playing_pts_us,
+                          pts == MP_NOPTS_VALUE ? INT64_MIN : llrint(pts * 1e6),
+                          memory_order_relaxed);
+}
+
+/* How a demuxer timestamp maps onto the engine's timeline (*out_pts_us):
+ * from `pts_us` on, engine position = pts + `offset_us`. The two advance
+ * together, so an entry is added only when the offset moves (a seek, a
+ * discontinuity, timestamp drift past HEARD_SLACK_US), and a few cover
+ * everything between the decoder and the speakers. */
+enum { HEARD_MAP_LEN = 16, HEARD_SLACK_US = 2000 };
+struct heard_entry {
+    int64_t pts_us;
+    int64_t offset_us;
+};
+
 struct priv {
     struct mp_log *log;
     struct mp_codec_params *codec;
@@ -111,6 +142,17 @@ struct priv {
      * frame. That returned "buffer too small" and we dropped the packet —
      * audible as a plop on the switch. */
     int scratch_ch_hwm;
+    /* Frames per packet the scratch holds (0 = SCRATCH_FRAMES). Doubled when a
+     * packet still does not fit at the widest layout, and kept, so a stream
+     * with longer packets costs one retry once, not one per packet. */
+    int scratch_frames;
+    /* The engine follows the user's decode_thread option (ABI minor >= 11):
+     * a packet's audio may come back a few calls after the packet, stamped
+     * with its own timestamp, and what the engine still holds at end of
+     * stream is drained before the EOF goes on. */
+    bool decode_thread_live;
+    bool draining;              // EOF seen: draining the engine before passing it on
+    struct mp_frame eof_frame;  // the EOF held back while draining
     bool source_spatial;        // container/bridge identified object content
     bool source_classified;     // first decoded presentation has been inspected
     bool force_host;            // engine unusable (no layout / create failed): always native
@@ -150,6 +192,13 @@ struct priv {
     int last_dnorm;
     unsigned last_bed_sig;      // fingerprint of the bed labels (change detection)
     uint64_t last_latency;      // last engine DSP latency, for change logging
+    /* The engine takes where the listener is (ABI 0.12 `heard_us`) and tells
+     * Studio, which then shows each block when it is heard. */
+    bool heard_supported;
+    struct heard_entry heard_map[HEARD_MAP_LEN]; // ring, newest at head - 1
+    int heard_map_head;
+    int heard_map_len;
+    int64_t heard_last_playing_us;  // the playing pts last reported
     struct mp_decoder public;
 };
 
@@ -227,7 +276,10 @@ static const char *label_to_short_name(uint8_t lbl)
  * mirrors what ffmpeg reports on the native path so shift+I reads the same.
  * `has_objects` reflects the actually-decoded object presence (object_count > 0),
  * not the bridge's pre-decode "may be spatial" flag — a plain multichannel
- * TrueHD/E-AC3 stream carries no objects and must not be labelled Atmos. */
+ * TrueHD/E-AC3 stream carries no objects and must not be labelled Atmos.
+ * The fallback for engines predating orender_source_label (ABI minor < 9):
+ * it cannot tell a fixed-height DTS:X or an Auro-3D layer from plain DTS,
+ * which is exactly what the engine's own label adds. */
 static const char *profile_base(const char *codec, bool has_objects)
 {
     if (strcmp(codec, "truehd") == 0)
@@ -274,13 +326,23 @@ static void refresh_codec_profile(struct priv *p)
     int objs    = p->dl->object_count(p->renderer);  // >=0 / -1
     int dnorm   = p->dl->dialnorm_db(p->renderer);   // <=0 / INT32_MIN (unknown)
 
+    /* The engine's own name for what it decodes — "DTS-HD MA + DTS:X 7.1.4",
+     * "DTS-HD MA + Auro-3D 11.1", "Dolby TrueHD + Dolby Atmos" (ABI minor
+     * >= 9; older engines report 0 and leave the buffer alone). A name too
+     * long for the buffer is not written either, so it reads as none. */
+    char label[96];
+    label[0] = '\0';
+    p->dl->source_label(p->renderer, label, sizeof(label));
+
     uint8_t bed[MP_NUM_CHANNELS];
     uint32_t bedn = p->dl->bed_layout(p->renderer, bed, MP_NUM_CHANNELS);
-    /* FNV-1a fingerprint of the bed labels, so a bed change (same object count)
-     * still triggers a rebuild. */
+    /* FNV-1a fingerprint of the bed labels and the engine's label, so a bed
+     * or label change (same object count) still triggers a rebuild. */
     unsigned bed_sig = 2166136261u;
     for (uint32_t i = 0; i < bedn; i++)
         bed_sig = (bed_sig ^ bed[i]) * 16777619u;
+    for (const char *c = label; *c; c++)
+        bed_sig = (bed_sig ^ (uint8_t)*c) * 16777619u;
 
     if (objs == p->last_objs && dnorm == p->last_dnorm &&
         bed_sig == p->last_bed_sig)
@@ -297,7 +359,8 @@ static void refresh_codec_profile(struct priv *p)
     char *buf = p->profile_buf[slot];
     size_t cap = sizeof(p->profile_buf[slot]);
 
-    int n = snprintf(buf, cap, "%s", profile_base(p->codec->codec, objs > 0));
+    int n = snprintf(buf, cap, "%s",
+                     label[0] ? label : profile_base(p->codec->codec, objs > 0));
     /* "· <bed labels>+<N> objects", e.g. "· LFE+11 objects" (no bed → "· N
      * objects"). Only when there are objects (plain multichannel reports 0). */
     if (objs > 0 && n > 0 && (size_t)n < cap) {
@@ -442,37 +505,121 @@ static void process_host(struct mp_filter *da, struct priv *p)
     }
 }
 
+/* The engine's timeline restarts (orender_reset): nothing mapped still holds. */
+static void heard_map_clear(struct priv *p)
+{
+    p->heard_map_head = 0;
+    p->heard_map_len = 0;
+    p->heard_last_playing_us = INT64_MIN;
+}
+
+/* Audio stamped `pts` (before the DSP latency shift: the content the engine
+ * decoded there) sits at `pos_us` on the engine's timeline. */
+static void heard_map_note(struct priv *p, double pts, int64_t pos_us)
+{
+    if (!p->heard_supported || pts == MP_NOPTS_VALUE)
+        return;
+    int64_t pts_us = llrint(pts * 1e6);
+    int64_t offset_us = pos_us - pts_us;
+    if (p->heard_map_len > 0) {
+        const struct heard_entry *last =
+            &p->heard_map[(p->heard_map_head + HEARD_MAP_LEN - 1) % HEARD_MAP_LEN];
+        if (llabs(offset_us - last->offset_us) <= HEARD_SLACK_US && pts_us >= last->pts_us)
+            return;
+    }
+    p->heard_map[p->heard_map_head] = (struct heard_entry){pts_us, offset_us};
+    p->heard_map_head = (p->heard_map_head + 1) % HEARD_MAP_LEN;
+    if (p->heard_map_len < HEARD_MAP_LEN)
+        p->heard_map_len++;
+}
+
+/* Tell the engine where the listener is on its timeline: the playing pts,
+ * through the newest mapping that starts at or before it. A pts the map does
+ * not reach yet (the old timeline still playing out after a seek) says
+ * nothing. */
+static void report_heard(struct priv *p)
+{
+    if (!p->heard_supported || !p->renderer)
+        return;
+    int64_t playing = atomic_load_explicit(&playing_pts_us, memory_order_relaxed);
+    if (playing == INT64_MIN || playing == p->heard_last_playing_us)
+        return;
+    for (int n = 1; n <= p->heard_map_len; n++) {
+        const struct heard_entry *e =
+            &p->heard_map[(p->heard_map_head + HEARD_MAP_LEN - n) % HEARD_MAP_LEN];
+        if (e->pts_us > playing)
+            continue;
+        int64_t heard = playing + e->offset_us;
+        char value[24];
+        snprintf(value, sizeof(value), "%" PRId64, heard > 0 ? heard : 0);
+        p->dl->set_option(p->renderer, "heard_us", value);
+        p->heard_last_playing_us = playing;
+        return;
+    }
+}
+
+/* One call into the engine: the packet when there is one, else a drain call
+ * at end of stream, for what its decode thread still holds. */
+static int engine_call(struct priv *p, struct demux_packet *mpkt, int64_t pts_us,
+                       float *samples, size_t capacity, uintptr_t *n_frames,
+                       uint32_t *n_ch, int64_t *out_pts_us)
+{
+    if (mpkt) {
+        return p->dl->process(p->renderer, mpkt->buffer, mpkt->len, pts_us,
+                              samples, capacity, n_frames, n_ch, out_pts_us);
+    }
+    return p->dl->drain(p->renderer, samples, capacity, n_frames, n_ch,
+                        out_pts_us);
+}
+
 /* Spatial mode: decode + VBAP-render through the engine. */
 static void process_spatial(struct mp_filter *da, struct priv *p, bool probe_host)
 {
-    if (!mp_pin_can_transfer_data(da->ppins[1], da->ppins[0]))
-        return;
+    struct mp_frame inframe = MP_NO_FRAME;
+    struct demux_packet *mpkt = NULL;
+    if (p->draining) {
+        /* End of stream: hand on what the engine still holds, a packet's
+         * audio per pass, then the EOF held back for it. */
+        if (!mp_pin_in_needs_data(da->ppins[1]))
+            return;
+        probe_host = false;
+    } else {
+        if (!mp_pin_can_transfer_data(da->ppins[1], da->ppins[0]))
+            return;
 
-    struct mp_frame inframe = mp_pin_out_read(da->ppins[0]);
-    if (inframe.type == MP_FRAME_EOF) {
-        if (probe_host && p->num_probe_packets > 0) {
-            MP_TARRAY_APPEND(p, p->probe_packets, p->num_probe_packets, inframe);
-            p->source_classified = true;
-            p->active_path = PATH_HOST;
-            p->dl->overlay_set_rendering(0);
-            p->dl->overlay_clear();
-            process_host(da, p);
-        } else {
-            mp_pin_in_write(da->ppins[1], inframe);
+        inframe = mp_pin_out_read(da->ppins[0]);
+        if (inframe.type == MP_FRAME_EOF) {
+            if (probe_host && p->num_probe_packets > 0) {
+                MP_TARRAY_APPEND(p, p->probe_packets, p->num_probe_packets, inframe);
+                p->source_classified = true;
+                p->active_path = PATH_HOST;
+                p->dl->overlay_set_rendering(0);
+                p->dl->overlay_clear();
+                process_host(da, p);
+            } else if (p->decode_thread_live) {
+                p->draining = true;
+                p->eof_frame = inframe;
+                mp_filter_internal_mark_progress(da);
+            } else {
+                mp_pin_in_write(da->ppins[1], inframe);
+            }
+            return;
+        } else if (inframe.type != MP_FRAME_PACKET) {
+            if (inframe.type) {
+                MP_ERR(da, "unknown frame type\n");
+                mp_filter_internal_mark_failed(da);
+            }
+            return;
         }
-        return;
-    } else if (inframe.type != MP_FRAME_PACKET) {
-        if (inframe.type) {
-            MP_ERR(da, "unknown frame type\n");
-            mp_filter_internal_mark_failed(da);
-        }
-        return;
+        mpkt = inframe.data;
     }
 
-    struct demux_packet *mpkt = inframe.data;
     struct mp_aframe *out = NULL;
     bool failed = false;
-    double pts = mpkt->pts;   /* demuxer timestamp; drives A/V sync (see below) */
+    /* Demuxer timestamp; drives A/V sync (see below). With the engine's decode
+     * thread on, the audio that comes back belongs to an earlier packet, so it
+     * is replaced below by that packet's own timestamp. */
+    double pts = mpkt ? mpkt->pts : MP_NOPTS_VALUE;
 
     /* The output channel count can change mid-stream (Studio toggling the
      * binaural ⇄ speaker output mode), so refresh it every packet and size
@@ -484,34 +631,76 @@ static void process_spatial(struct mp_filter *da, struct priv *p, bool probe_hos
     /* Never shrink back to the current mode's width — see scratch_ch_hwm. */
     if (ch > p->scratch_ch_hwm)
         p->scratch_ch_hwm = ch;
-    size_t capacity = (size_t)4096 * (size_t)p->scratch_ch_hwm;
+    if (p->scratch_frames <= 0)
+        p->scratch_frames = SCRATCH_FRAMES;
+    size_t capacity = (size_t)p->scratch_frames * (size_t)p->scratch_ch_hwm;
     float *samples = talloc_array(NULL, float, capacity);
 
     uintptr_t n_frames = 0;
     uint32_t n_ch = 0;
     int64_t out_pts_us = 0;
-    int64_t pts_us = mpkt->pts == MP_NOPTS_VALUE ? 0 : (int64_t)(mpkt->pts * 1e6);
+    /* INT64_MIN stands for "no timestamp" on the way through the engine. */
+    int64_t pts_us = !mpkt || mpkt->pts == MP_NOPTS_VALUE
+                     ? INT64_MIN : (int64_t)llrint(mpkt->pts * 1e6);
 
-    int ret = p->dl->process(p->renderer, mpkt->buffer, mpkt->len, pts_us,
-                             samples, capacity,
-                             &n_frames, &n_ch, &out_pts_us);
+    report_heard(p);
+
+    int ret = engine_call(p, mpkt, pts_us, samples, capacity,
+                          &n_frames, &n_ch, &out_pts_us);
+    /* A short buffer: the packet is decoded and rendered already, and an engine
+     * from ABI 0.10 on (Omniphony #570) holds that audio and hands it back when
+     * called again with the same packet, without decoding it a second time.
+     * Grow the scratch and retry: to the width the renderer reports now (an
+     * output-mode switch landing inside the call), else to twice the frames.
+     * Both stay raised, so this costs a retry the first time, not every packet.
+     * Older engines would decode the packet again and advance the bridge
+     * twice, so for them the packet is dropped, as before. */
+    for (int attempt = 0; ret > 0 && attempt < SCRATCH_RETRIES; attempt++) {
+        uint32_t now_ch = p->dl->channel_count(p->renderer);
+        if (p->dl->abi_minor < 10) {
+            if (now_ch > 0 && now_ch <= MP_NUM_CHANNELS && (int)now_ch > p->scratch_ch_hwm)
+                p->scratch_ch_hwm = (int)now_ch;
+            break;
+        }
+        if (now_ch > 0 && now_ch <= MP_NUM_CHANNELS && (int)now_ch > p->scratch_ch_hwm) {
+            p->scratch_ch_hwm = (int)now_ch;
+        } else {
+            p->scratch_frames *= 2;
+        }
+        MP_VERBOSE(da, "orender output buffer too small (%zu floats); retrying "
+                       "with %d frames x %d ch\n", capacity, p->scratch_frames,
+                   p->scratch_ch_hwm);
+        capacity = (size_t)p->scratch_frames * (size_t)p->scratch_ch_hwm;
+        talloc_free(samples);
+        samples = talloc_array(NULL, float, capacity);
+        ret = engine_call(p, mpkt, pts_us, samples, capacity,
+                          &n_frames, &n_ch, &out_pts_us);
+    }
     if (ret < 0) {
         MP_ERR(da, "orender_process error %d\n", ret);
         failed = true;
         goto done;
     }
     if (ret > 0) {
-        /* Retrying is not possible: orender_process has already decoded this
-         * packet by the time it finds the buffer short, so calling again would
-         * advance the bridge twice. Raise the mark to the width the renderer
-         * reports now, so this costs one packet the first time a stream widens
-         * and nothing on later switches. */
-        uint32_t now_ch = p->dl->channel_count(p->renderer);
-        if (now_ch > 0 && now_ch <= MP_NUM_CHANNELS && (int)now_ch > p->scratch_ch_hwm)
-            p->scratch_ch_hwm = (int)now_ch;
-        MP_WARN(da, "orender output buffer too small (sized for %d ch, renderer "
-                    "reports %u ch); dropping packet\n", ch, now_ch);
+        MP_WARN(da, "orender output buffer too small (%zu floats, renderer "
+                    "reports %u ch); dropping packet\n", capacity,
+                p->dl->channel_count(p->renderer));
         goto done;
+    }
+
+    if (!mpkt && n_frames == 0) {
+        /* Drained: nothing is left in the engine, so the EOF can go on. */
+        p->draining = false;
+        mp_pin_in_write(da->ppins[1], p->eof_frame);
+        p->eof_frame = MP_NO_FRAME;
+        talloc_free(samples);
+        return;
+    }
+
+    if (p->dl->have_output_packet_pts) {
+        int64_t in_pts = INT64_MIN;
+        if (p->dl->output_packet_pts(p->renderer, &in_pts) == 1)
+            pts = in_pts == INT64_MIN ? MP_NOPTS_VALUE : in_pts / 1e6;
     }
 
     if (probe_host) {
@@ -623,8 +812,9 @@ static void process_spatial(struct mp_filter *da, struct priv *p, bool probe_hos
     }
 
     /* Now that a real frame has decoded, the engine knows the presentation's
-     * Atmos flag, object count and DialNorm — surface them as the track's codec
-     * profile so shift+I matches the native path (and adds objects + DialNorm). */
+     * name (or Atmos flag), object count and DialNorm — surface them as the
+     * track's codec profile so shift+I matches the native path (and adds
+     * objects + DialNorm). */
     refresh_codec_profile(p);
 
     /* Compensate the engine's constant DSP latency (ABI minor >= 7; the stub
@@ -641,6 +831,11 @@ static void process_spatial(struct mp_filter *da, struct priv *p, bool probe_hos
                    p->sample_rate > 0 ? latency * 1000.0 / p->sample_rate : 0.0);
         p->last_latency = latency;
     }
+    /* Mapped before the shift below: the engine marks a block where it
+     * decoded it, and the listener reaches that block when the content it
+     * decoded there plays, which is this pts. */
+    if (n_frames > 0)
+        heard_map_note(p, pts, out_pts_us);
     if (latency > 0 && p->sample_rate > 0 && pts != MP_NOPTS_VALUE)
         pts -= (double)latency / p->sample_rate;
 
@@ -696,6 +891,13 @@ static void ad_orender_process(struct mp_filter *da)
 {
     struct priv *p = da->priv;
 
+    /* Past the EOF, only the drain is left: it goes through the spatial path
+     * whatever the live mode says, since only the engine holds that audio. */
+    if (p->draining) {
+        process_spatial(da, p, false);
+        return;
+    }
+
     /* The live channel mode only selects what to do with channel-based sources.
      * Object content identified by the container or bridge always stays on the
      * spatial path, independently of Studio's "Spatialize 2D sources" toggle. */
@@ -711,6 +913,7 @@ static void ad_orender_process(struct mp_filter *da)
         if (path == PATH_SPATIAL) {
             if (p->renderer)
                 p->dl->reset(p->renderer);
+            heard_map_clear(p);
             p->checked_spatial = false;
             p->dl->overlay_set_rendering(1);  // show the spatial overlay again
             /* A host stint's child ad_lavc overwrote codec_desc/codec_profile
@@ -743,11 +946,15 @@ static void ad_orender_reset(struct mp_filter *da)
     struct priv *p = da->priv;
     if (p->renderer)
         p->dl->reset(p->renderer);
+    heard_map_clear(p);
     if (p->native && p->native->f)
         mp_filter_reset(p->native->f);
     clear_probe_packets(p);
     p->checked_spatial = false;
     p->active_path = PATH_NONE;
+    /* A seek past the EOF: the engine reset above discarded what was left. */
+    p->draining = false;
+    mp_frame_unref(&p->eof_frame);
 }
 
 static void ad_orender_destroy(struct mp_filter *da)
@@ -862,6 +1069,27 @@ static struct mp_decoder *create(struct mp_filter *parent,
                    "(~/.config/omniphony/config.yaml); see stderr.\n");
 #endif
         p->force_host = true;
+    }
+
+    /* Let the user's decode_thread option (Studio, config.yaml) decide whether
+     * the engine decodes on a thread of its own. Only an engine that hands
+     * back each packet's timestamp with its audio (ABI minor >= 11) is asked:
+     * this decoder stamps its output with those and drains at EOF. */
+    if (p->renderer && p->dl->have_output_packet_pts) {
+        p->decode_thread_live =
+            p->dl->set_option(p->renderer, "decode_thread", "live") == 0;
+        MP_VERBOSE(da, "decode thread: %s\n", p->decode_thread_live
+                   ? "follows the decode_thread option" : "not offered");
+    }
+
+    /* Tell the engine where the listener is, so Studio can follow the sound
+     * (ABI minor >= 12; an older engine answers -1 for the unknown key). The
+     * first report, 0, is right: nothing has been heard yet. */
+    heard_map_clear(p);
+    if (p->renderer && p->dl->have_set_option) {
+        p->heard_supported = p->dl->set_option(p->renderer, "heard_us", "0") == 0;
+        MP_VERBOSE(da, "heard position: %s\n", p->heard_supported
+                   ? "reported to the engine" : "not offered");
     }
 
     /* Per-invocation override of the shared config's initial channel render mode.
