@@ -23,7 +23,10 @@ Generated against mpv **v0.41.0**. What the series adds, by area:
 - **Spatial overlay** — `player/orender_overlay.c`: built-in client that pulls
   the engine's ASS overlay + BGRA heatmap (replaces the old Lua shim).
 - **Audio outputs** — ASIO driver (`ao_asio`), WASAPI/waveext multichannel
-  layout advertisement (5.1.4/7.1.4/9.1.6).
+  layout advertisement (5.1.4/7.1.4/9.1.6), and a timed mode for `ao_pcm`
+  (`--ao-pcm-timed`, `--ao-pcm-buffer`, `--ao-pcm-latency`): the PCM/pipe
+  writer plays at the nominal rate on mpv's clock, so a standalone orender
+  reading the pipe can follow mpv's clock (the only input on Windows).
 - **Build** — `orender` meson feature (source-only since the dlopen change:
   no build-time dependency).
 

@@ -1,0 +1,107 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mathieu GRENET <sub@mgth.fr>
+Date: Fri, 14 Aug 2026 20:58:23 +0200
+Subject: [PATCH 30/40] ad_orender: size the scratch for the widest layout, not
+ the current mode (#12)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+An output-mode switch can land inside orender_process(), which then decodes
+into the *new* mode. The scratch was sized from the channel count queried just
+before the call, so a flip to speakers left a binaural-sized buffer too small:
+the call returned "buffer too small" and the packet was dropped — audible as a
+plop on the switch.
+
+Retrying is not an option. By the time orender_process finds the buffer short
+it has already decoded the packet and discarded the chunks; calling again with
+the same packet would advance the bridge twice. The buffer has to be large
+enough beforehand.
+
+Keep a high-water mark of the widest layout the stream has produced and size
+the scratch from that, never shrinking back. On the one path that can still be
+caught short — the first time a stream widens — raise the mark from what the
+renderer reports, so it costs a single packet once rather than one per switch.
+
+Also bound the copy against the scratch it reads from. The (n_frames, n_ch)
+pair comes back across the FFI and sizes a memcpy out of a buffer we allocated;
+a report exceeding what the call was allowed to fill would read past the end
+and play adjacent heap as PCM. A renderer-side race made exactly that happen
+(fixed there), so this stays as a cheap guard on the trust boundary.
+
+Verified over 157 live mode flips through a real decode: 5 dropped packets
+before, 0 after, and no warnings from the guard.
+
+Co-authored-by: Claude <noreply@anthropic.com>
+(cherry picked from commit 393ff5dd28f8595fca03ff187f81903e09ae57fc)
+---
+ audio/decode/ad_orender.c | 35 +++++++++++++++++++++++++++++++++--
+ 1 file changed, 33 insertions(+), 2 deletions(-)
+
+diff --git a/audio/decode/ad_orender.c b/audio/decode/ad_orender.c
+index f262a70eb6..05a5dfae8c 100644
+--- a/audio/decode/ad_orender.c
++++ b/audio/decode/ad_orender.c
+@@ -104,6 +104,13 @@ struct priv {
+     struct mp_chmap chmap;
+     bool checked_spatial;       // built the output chmap for the spatial path
+     int last_mapping;           // last orender_channel_mapping() the chmap was built for (live switch)
++    /* Widest output layout this stream has produced. The scratch is sized from
++     * this rather than from the mode we are nominally in: an output-mode switch
++     * can land inside orender_process(), which then decodes into the NEW mode,
++     * and a buffer sized for binaural stereo is then too small for a speaker
++     * frame. That returned "buffer too small" and we dropped the packet —
++     * audible as a plop on the switch. */
++    int scratch_ch_hwm;
+     bool source_spatial;        // container/bridge identified object content
+     bool source_classified;     // first decoded presentation has been inspected
+     bool force_host;            // engine unusable (no layout / create failed): always native
+@@ -474,7 +481,10 @@ static void process_spatial(struct mp_filter *da, struct priv *p, bool probe_hos
+     if (cur_ch > 0 && cur_ch <= MP_NUM_CHANNELS && (int)cur_ch != p->channels)
+         p->channels = (int)cur_ch;
+     int ch = p->channels > 0 ? p->channels : 1;
+-    size_t capacity = (size_t)4096 * (size_t)ch;
++    /* Never shrink back to the current mode's width — see scratch_ch_hwm. */
++    if (ch > p->scratch_ch_hwm)
++        p->scratch_ch_hwm = ch;
++    size_t capacity = (size_t)4096 * (size_t)p->scratch_ch_hwm;
+     float *samples = talloc_array(NULL, float, capacity);
+ 
+     uintptr_t n_frames = 0;
+@@ -491,7 +501,16 @@ static void process_spatial(struct mp_filter *da, struct priv *p, bool probe_hos
+         goto done;
+     }
+     if (ret > 0) {
+-        MP_WARN(da, "orender output buffer too small; dropping packet\n");
++        /* Retrying is not possible: orender_process has already decoded this
++         * packet by the time it finds the buffer short, so calling again would
++         * advance the bridge twice. Raise the mark to the width the renderer
++         * reports now, so this costs one packet the first time a stream widens
++         * and nothing on later switches. */
++        uint32_t now_ch = p->dl->channel_count(p->renderer);
++        if (now_ch > 0 && now_ch <= MP_NUM_CHANNELS && (int)now_ch > p->scratch_ch_hwm)
++            p->scratch_ch_hwm = (int)now_ch;
++        MP_WARN(da, "orender output buffer too small (sized for %d ch, renderer "
++                    "reports %u ch); dropping packet\n", ch, now_ch);
+         goto done;
+     }
+ 
+@@ -535,6 +554,18 @@ static void process_spatial(struct mp_filter *da, struct priv *p, bool probe_hos
+     if (n_frames == 0)
+         goto done;   /* packet consumed; no output yet (need more data) */
+ 
++    /* The copy at the end of this function is sized from the (n_frames, n_ch)
++     * orender_process reports, but reads out of `samples`, which we allocated.
++     * Bound it: a report exceeding what the call was allowed to fill would read
++     * past the scratch and play adjacent heap as PCM. A renderer bug made
++     * exactly that happen (a mode switch racing the channel count), so this
++     * stays as a cheap guard on a memcpy that crosses the FFI trust boundary. */
++    if ((size_t)n_frames * (size_t)n_ch > capacity) {
++        MP_ERR(da, "orender reported %zu frames x %u ch from a %zu-float "
++                   "buffer; dropping frame\n", (size_t)n_frames, n_ch, capacity);
++        goto done;
++    }
++
+     /* Resolve the output chmap on the first *decoded* frame. Deferred until
+      * n_frames > 0: the layout is only meaningful once the bridge has decoded a
+      * frame (AC-3/DTS need several packets to acquire sync). */
