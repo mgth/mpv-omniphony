@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Thu, 1 Oct 2026 11:53:12 +0200
-Subject: [PATCH 37/41] ad_orender: tell the engine where the listener is, so
+Subject: [PATCH 37/42] ad_orender: tell the engine where the listener is, so
  Studio follows the sound
 
 The engine describes each block of audio to Omniphony Studio (object frame,

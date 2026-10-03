@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Thu, 1 Oct 2026 16:54:34 +0200
-Subject: [PATCH 40/41] chore(orender): point the vendored header at the merged
+Subject: [PATCH 40/42] chore(orender): point the vendored header at the merged
  Omniphony commit
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
