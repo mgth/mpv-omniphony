@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mathieu GRENET <mathieu@mgth.fr>
+Date: Sat, 3 Oct 2026 11:59:19 +0200
+Subject: [PATCH 41/42] demux/dovi_split: carry the BL packet position to the
+ EL packet
+
+The EL packet mirrored the BL packet's pts, dts, duration and keyframe
+flag, but not its file position. In Matroska the HEVC packets carry no
+DTS, so the EL queue was left with neither a monotonic DTS nor a
+monotonic position, and initiate_refresh_seek() refused the refresh seek
+for every track switch while the EL stream was selected ("can't issue
+refresh seek").
+
+Without the refresh seek, the newly selected audio track starts at the
+demuxer's read-ahead position. With the cache enabled (any network
+mount), that is up to demuxer-max-bytes ahead: on a ~60 Mb/s Dolby Vision
+FEL remux, audio stayed silent for 18-20 s after the switch, waiting for
+video to catch up.
+
+Copy the position as well. A track switch now issues the refresh seek
+and audio resumes within ~0.3 s.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ demux/dovi_split.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/demux/dovi_split.c b/demux/dovi_split.c
+index cfe27185da..c9a435ab7b 100644
+--- a/demux/dovi_split.c
++++ b/demux/dovi_split.c
+@@ -192,8 +192,12 @@ struct demux_packet *mp_dovi_split_dispatch(struct mp_dovi_split *s,
+         new_demux_packet_from_avpacket(s->demuxer->packet_pool, s->staging);
+     if (dp) {
+         // Mirror the BL packet's timing so the pairing filter can match by PTS.
++        // The file position too: without it (and with no DTS, as in mkv HEVC)
++        // the EL queue has no monotonic key, and the demuxer refuses the
++        // refresh seek a track switch needs.
+         dp->pts = bl_dp->pts;
+         dp->dts = bl_dp->dts;
++        dp->pos = bl_dp->pos;
+         dp->duration = bl_dp->duration;
+         dp->keyframe = bl_dp->keyframe;
+         dp->stream = s->el->index;

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Tue, 18 Aug 2026 00:49:30 +0200
-Subject: [PATCH 27/40] ao/asio: build against the ASIO SDK headers, under
+Subject: [PATCH 27/42] ao/asio: build against the ASIO SDK headers, under
  GPLv3
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -353,10 +353,10 @@ index 3b4f598f53..c3f85dcf4c 100644
  
  #endif /* MP_AO_ASIO_H_ */
 diff --git a/meson.build b/meson.build
-index 8d5ddd61b8..b829c5a8ec 100644
+index a36b95d65e..b2a2d1cab0 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -982,11 +982,30 @@ if features['wasapi']
+@@ -980,11 +980,30 @@ if features['wasapi']
                       'audio/out/ao_wasapi_utils.c')
  endif
  

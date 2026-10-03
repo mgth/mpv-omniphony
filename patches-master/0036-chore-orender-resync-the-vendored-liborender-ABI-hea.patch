@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Tue, 29 Sep 2026 22:57:47 +0200
-Subject: [PATCH 36/40] chore(orender): resync the vendored liborender ABI
+Subject: [PATCH 36/42] chore(orender): resync the vendored liborender ABI
  header
 
 Copy of orender_ffi/include/orender.h from mgth/Omniphony @ b4cfa561 (ABI

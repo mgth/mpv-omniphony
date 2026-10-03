@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mathieu GRENET <mathieu@mgth.fr>
+Date: Fri, 4 Sep 2026 12:57:40 +0200
+Subject: [PATCH 42/42] wayland: force BT.709 container primaries for
+ Windows-scRGB output
+
+set_color_management() asks the compositor for a Windows-scRGB image
+description, which by definition uses sRGB (BT.709) primaries with an
+extended range, but leaves color->primaries at whatever the target hint
+carried. With --target-colorspace-hint the hint starts from the
+compositor's preferred description, so on an HDR output the container
+primaries are BT.2020: libplacebo then encodes BT.2020 RGB into a buffer
+the compositor interprets as sRGB, which visibly desaturates and darkens
+the picture (KWin, Plasma 6, --target-trc=scrgb).
+
+Force the container primaries to BT.709 in that branch. The gamut
+(hdr.prim) is left untouched, and vo_gpu_next already skips gamut clipping
+for scRGB, so wide-gamut content still reaches the compositor through the
+extended range.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ video/out/wayland_common.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/video/out/wayland_common.c b/video/out/wayland_common.c
+index d1bf43e1f4..7dd545a8c9 100644
+--- a/video/out/wayland_common.c
++++ b/video/out/wayland_common.c
+@@ -3695,6 +3695,12 @@ static void set_color_management(struct vo_wayland_state *wl, struct pl_color_sp
+ #if PL_API_VER >= 362
+     // scRGB has dedicated creator, and not using the generic one.
+     if (color->transfer == PL_COLOR_TRC_SCRGB && wl->supports_scrgb) {
++        // Windows-scRGB is defined with sRGB (BT.709) primaries; wide-gamut
++        // content escapes them through negative/extended values. The hint
++        // still carries the compositor's preferred container primaries
++        // (e.g. BT.2020 on an HDR output), so rendering into those would be
++        // read back as sRGB by the compositor and desaturate the picture.
++        color->primaries = PL_COLOR_PRIM_BT_709;
+         image_description = wp_color_manager_v1_create_windows_scrgb(wl->color_manager);
+         cm_dispatch_color_queue(wl, image_description);
+         return;

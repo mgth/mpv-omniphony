@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Tue, 26 May 2026 12:48:20 +0200
-Subject: [PATCH 01/40] =?UTF-8?q?audio:=20add=20ad=5Forender=20=E2=80=94?=
+Subject: [PATCH 01/42] =?UTF-8?q?audio:=20add=20ad=5Forender=20=E2=80=94?=
  =?UTF-8?q?=20spatial=20audio=20decoder=20via=20liborender?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -394,7 +394,7 @@ index 0000000000..e0002cfb38
 +    .add_decoders = add_decoders,
 +};
 diff --git a/filters/f_decoder_wrapper.c b/filters/f_decoder_wrapper.c
-index 2b76b26b14..d1a408b058 100644
+index 2397c855fc..33ba237e66 100644
 --- a/filters/f_decoder_wrapper.c
 +++ b/filters/f_decoder_wrapper.c
 @@ -26,6 +26,7 @@
@@ -477,7 +477,7 @@ index b39d3f5f2a..6c89b19171 100644
  // Convenience wrapper for lavc based decoders. Treat lavc_state as private;
  // init to all-0 on init and resets.
 diff --git a/meson.build b/meson.build
-index 8fed718d1a..837ea7ec89 100644
+index c49aa3cec9..19cbe1c32e 100644
 --- a/meson.build
 +++ b/meson.build
 @@ -712,6 +712,13 @@ if features['libarchive']

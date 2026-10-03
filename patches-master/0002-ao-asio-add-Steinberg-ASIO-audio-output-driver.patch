@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Tue, 26 May 2026 12:50:45 +0200
-Subject: [PATCH 02/40] ao/asio: add Steinberg ASIO audio output driver
+Subject: [PATCH 02/42] ao/asio: add Steinberg ASIO audio output driver
 
 Add ao_asio, a pull-style audio output for mpv targeting Steinberg ASIO
 drivers on Windows. The driver:
@@ -1185,10 +1185,10 @@ index 0000000000..52640a3b60
 +
 +#endif /* MP_AO_ASIO_H_ */
 diff --git a/meson.build b/meson.build
-index 837ea7ec89..154b8596e5 100644
+index 19cbe1c32e..b90d90d6cc 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -979,6 +979,14 @@ if features['wasapi']
+@@ -977,6 +977,14 @@ if features['wasapi']
                       'audio/out/ao_wasapi_utils.c')
  endif
  
