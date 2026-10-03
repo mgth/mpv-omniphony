@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Tue, 16 Jun 2026 08:25:41 +0200
-Subject: [PATCH 15/40] feat(ad_orender): keep the engine alive in host mode;
+Subject: [PATCH 15/41] feat(ad_orender): keep the engine alive in host mode;
  live spatial<->host
 
 ad_orender is now the persistent decoder for the supported codecs and
@@ -451,7 +451,7 @@ index 96e5f6bb19..313a947f96 100644
      return &p->public;
  }
 diff --git a/filters/f_decoder_wrapper.c b/filters/f_decoder_wrapper.c
-index 580eb0b02b..e0b4fcf14e 100644
+index c8cc593b09..a2fca75ab9 100644
 --- a/filters/f_decoder_wrapper.c
 +++ b/filters/f_decoder_wrapper.c
 @@ -192,11 +192,6 @@ struct priv {
@@ -490,7 +490,7 @@ index 580eb0b02b..e0b4fcf14e 100644
  #endif
      }
  
-@@ -1149,25 +1146,6 @@ static void read_frame(struct priv *p)
+@@ -1150,25 +1147,6 @@ static void read_frame(struct priv *p)
  
      frame = mp_pin_out_read(p->decoder->f->pins[1]);
      if (!frame.type) {

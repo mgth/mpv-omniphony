@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Sun, 14 Jun 2026 14:28:27 +0200
-Subject: [PATCH 12/40] ad_orender: host channel-mode fallback to the native
+Subject: [PATCH 12/41] ad_orender: host channel-mode fallback to the native
  decoder
 
 Add --ad-orender-channel-mode (auto/host/direct/virtual) and, in host mode on a
@@ -164,7 +164,7 @@ index 4c2c7552b9..4eef87b7ed 100644
      codec->codec_desc = is_eac3 ? "eac3 (orender, spatial)"
                                  : "truehd (orender, spatial)";
 diff --git a/filters/f_decoder_wrapper.c b/filters/f_decoder_wrapper.c
-index d1a408b058..6ae0010a57 100644
+index 33ba237e66..4853fd6949 100644
 --- a/filters/f_decoder_wrapper.c
 +++ b/filters/f_decoder_wrapper.c
 @@ -192,6 +192,11 @@ struct priv {
@@ -196,7 +196,7 @@ index d1a408b058..6ae0010a57 100644
  #endif
      }
  
-@@ -1141,8 +1147,28 @@ static void read_frame(struct priv *p)
+@@ -1142,8 +1148,28 @@ static void read_frame(struct priv *p)
      p->reverse_queue_complete = false;
  
      frame = mp_pin_out_read(p->decoder->f->pins[1]);

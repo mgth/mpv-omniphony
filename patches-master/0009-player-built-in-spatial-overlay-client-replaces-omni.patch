@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Fri, 12 Jun 2026 09:23:29 +0200
-Subject: [PATCH 09/40] player: built-in spatial overlay client (replaces
+Subject: [PATCH 09/41] player: built-in spatial overlay client (replaces
  omniphony-overlay.lua)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -46,7 +46,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
  create mode 100644 player/orender_overlay.c
 
 diff --git a/meson.build b/meson.build
-index 154b8596e5..ff8b76776e 100644
+index b90d90d6cc..0df383ef97 100644
 --- a/meson.build
 +++ b/meson.build
 @@ -716,7 +716,8 @@ orender = dependency('orender', version: '>= 0.1', required: get_option('orender
@@ -74,7 +74,7 @@ index 2889d352bd..7dd56f8c2c 100644
  void redraw_subs(struct MPContext *mpctx);
  void reset_subtitle_state(struct MPContext *mpctx);
 diff --git a/player/main.c b/player/main.c
-index 0ef3d7f6d6..416dbf8795 100644
+index 5cc273c3ed..ea813791f5 100644
 --- a/player/main.c
 +++ b/player/main.c
 @@ -441,6 +441,10 @@ int mp_initialize(struct MPContext *mpctx, char **options)

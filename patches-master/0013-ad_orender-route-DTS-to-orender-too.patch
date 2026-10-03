@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Sun, 14 Jun 2026 16:37:06 +0200
-Subject: [PATCH 13/40] ad_orender: route DTS to orender too
+Subject: [PATCH 13/41] ad_orender: route DTS to orender too
 
 Add "dts" to the codec gate in f_decoder_wrapper (decoder selection) and
 ad_orender (create + add_decoders + codec_desc), so DTS tracks decode through
@@ -56,7 +56,7 @@ index 4eef87b7ed..a5ca498659 100644
  
  const struct mp_decoder_fns ad_orender = {
 diff --git a/filters/f_decoder_wrapper.c b/filters/f_decoder_wrapper.c
-index 6ae0010a57..580eb0b02b 100644
+index 4853fd6949..c8cc593b09 100644
 --- a/filters/f_decoder_wrapper.c
 +++ b/filters/f_decoder_wrapper.c
 @@ -499,7 +499,8 @@ static bool reinit_decoder(struct priv *p)
