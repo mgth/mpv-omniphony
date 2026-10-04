@@ -156,6 +156,15 @@ struct priv {
     bool source_spatial;        // container/bridge identified object content
     bool source_classified;     // first decoded presentation has been inspected
     bool force_host;            // engine unusable (no layout / create failed): always native
+    /* IAMF: the engine's bridge needs the IA sequence's descriptor OBUs
+     * before any temporal unit, and Matroska/ISO-BMFF carry them out of band
+     * (CodecPrivate / iacb), so they are fed in ahead of the first packet and
+     * again after every engine reset. IAMF has no native decoder in mpv: it
+     * never goes to host mode. */
+    bool iamf;
+    const uint8_t *iamf_config;
+    size_t iamf_config_len;
+    bool iamf_config_pending;
     int host_decoder_idx;       // HOST_DEC_LAVC (PCM) or HOST_DEC_SPDIF (passthrough)
     struct mp_decoder *native;  // lazily-created native child decoder for host mode
     int active_path;            // PATH_* of the last packet, for clean transitions
@@ -282,6 +291,8 @@ static const char *label_to_short_name(uint8_t lbl)
  * which is exactly what the engine's own label adds. */
 static const char *profile_base(const char *codec, bool has_objects)
 {
+    if (strcmp(codec, "iamf") == 0)
+        return "IAMF";
     if (strcmp(codec, "truehd") == 0)
         return has_objects ? "Dolby TrueHD + Dolby Atmos" : "Dolby TrueHD";
     if (strcmp(codec, "eac3") == 0)
@@ -565,6 +576,16 @@ static int engine_call(struct priv *p, struct demux_packet *mpkt, int64_t pts_us
                        uint32_t *n_ch, int64_t *out_pts_us)
 {
     if (mpkt) {
+        if (p->iamf_config_pending) {
+            /* Descriptors only: they configure the decoder and produce no
+             * audio, so whatever this call reports is overwritten below. */
+            int ret = p->dl->process(p->renderer, p->iamf_config,
+                                     p->iamf_config_len, INT64_MIN, samples,
+                                     capacity, n_frames, n_ch, out_pts_us);
+            if (ret < 0)
+                return ret;
+            p->iamf_config_pending = false;
+        }
         return p->dl->process(p->renderer, mpkt->buffer, mpkt->len, pts_us,
                               samples, capacity, n_frames, n_ch, out_pts_us);
     }
@@ -913,6 +934,7 @@ static void ad_orender_process(struct mp_filter *da)
         if (path == PATH_SPATIAL) {
             if (p->renderer)
                 p->dl->reset(p->renderer);
+            p->iamf_config_pending = p->iamf;
             heard_map_clear(p);
             p->checked_spatial = false;
             p->dl->overlay_set_rendering(1);  // show the spatial overlay again
@@ -946,6 +968,7 @@ static void ad_orender_reset(struct mp_filter *da)
     struct priv *p = da->priv;
     if (p->renderer)
         p->dl->reset(p->renderer);
+    p->iamf_config_pending = p->iamf;
     heard_map_clear(p);
     if (p->native && p->native->f)
         mp_filter_reset(p->native->f);
@@ -985,8 +1008,34 @@ static struct mp_decoder *create(struct mp_filter *parent,
 {
     if (!codec->codec ||
         (strcmp(codec->codec, "truehd") != 0 && strcmp(codec->codec, "eac3") != 0 &&
-         strcmp(codec->codec, "ac3") != 0 && strcmp(codec->codec, "dts") != 0))
+         strcmp(codec->codec, "ac3") != 0 && strcmp(codec->codec, "dts") != 0 &&
+         strcmp(codec->codec, "iamf") != 0))
         return NULL;
+
+    /* IAMF extradata is the IAConfigurationBox payload: version 1, a leb128
+     * size, then the descriptor OBUs the bridge reads. */
+    const uint8_t *iamf_config = NULL;
+    size_t iamf_config_len = 0;
+    if (strcmp(codec->codec, "iamf") == 0) {
+        const uint8_t *x = codec->extradata;
+        int x_len = codec->extradata_size;
+        uint64_t size = 0;
+        int at = 1;
+        for (int shift = 0; x && at < x_len && shift < 56; shift += 7) {
+            uint8_t byte = x[at++];
+            size |= (uint64_t)(byte & 0x7f) << shift;
+            if (!(byte & 0x80))
+                break;
+        }
+        if (!x || x_len < 2 || x[0] != 1 || size == 0 || size > (uint64_t)(x_len - at)) {
+            mp_err(parent->log, "IAMF track without a usable configuration "
+                                "(CodecPrivate must be IAConfigurationBox "
+                                "version 1)\n");
+            return NULL;
+        }
+        iamf_config = x + at;
+        iamf_config_len = size;
+    }
 
     struct mp_filter *da = mp_filter_create(parent, &ad_orender_filter);
     if (!da)
@@ -1003,6 +1052,10 @@ static struct mp_decoder *create(struct mp_filter *parent,
     p->sample_rate = codec->samplerate;
     p->active_path = PATH_NONE;
     p->source_spatial = codec_is_spatial_hint(codec);
+    p->iamf = iamf_config != NULL;
+    p->iamf_config = iamf_config;
+    p->iamf_config_len = iamf_config_len;
+    p->iamf_config_pending = p->iamf;
     /* The hint is provisional: routing follows the *decoded* fact (the
      * engine's has_objects is live), so classification only happens once the
      * bridge has produced frames. A container-profiled DTS:X track whose
@@ -1011,6 +1064,13 @@ static struct mp_decoder *create(struct mp_filter *parent,
      * the hint here left the embedded engine passing through silence
      * forever (channel-object contract, phase 5). */
     p->source_classified = false;
+    if (p->iamf) {
+        /* Nothing to classify and nothing to fall back to: IAMF always
+         * renders through the engine (the bridge renders every mix to a bed
+         * the engine then places), whatever the live channel mode says. */
+        p->source_spatial = true;
+        p->source_classified = true;
+    }
     p->public.f = da;
 
     MP_VERBOSE(da, "input profile: %s (early spatial=%s)\n",
@@ -1118,6 +1178,8 @@ static struct mp_decoder *create(struct mp_filter *parent,
         p->orender_desc = "AC-3";
     else if (strcmp(codec->codec, "dts") == 0)
         p->orender_desc = "DTS";
+    else if (p->iamf)
+        p->orender_desc = "IAMF";
     else
         p->orender_desc = "TrueHD";
     codec->codec_desc = p->orender_desc;
@@ -1139,6 +1201,8 @@ static void add_decoders(struct mp_decoder_list *list)
     mp_add_decoder(list, "ac3", "orender",
                    "Spatial audio via liborender (VBAP object rendering)");
     mp_add_decoder(list, "dts", "orender",
+                   "Spatial audio via liborender (VBAP object rendering)");
+    mp_add_decoder(list, "iamf", "orender",
                    "Spatial audio via liborender (VBAP object rendering)");
 }
 
