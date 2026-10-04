@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Fri, 4 Sep 2026 12:57:40 +0200
-Subject: [PATCH 42/42] wayland: force BT.709 container primaries for
+Subject: [PATCH 42/43] wayland: force BT.709 container primaries for
  Windows-scRGB output
 
 set_color_management() asks the compositor for a Windows-scRGB image

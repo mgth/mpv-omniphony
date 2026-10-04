@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Mon, 21 Sep 2026 10:58:57 +0200
-Subject: [PATCH 32/40] orender_abi.h: point the provenance at the squash
+Subject: [PATCH 32/41] orender_abi.h: point the provenance at the squash
  commit on main (mgth/Omniphony@8ce9a133)
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>

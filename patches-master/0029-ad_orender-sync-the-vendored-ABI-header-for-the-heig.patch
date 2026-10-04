@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Sat, 19 Sep 2026 21:57:11 +0200
-Subject: [PATCH 29/42] ad_orender: sync the vendored ABI header for the
+Subject: [PATCH 29/43] ad_orender: sync the vendored ABI header for the
  height-tier labels (ABI 0.8)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
