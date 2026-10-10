@@ -1,0 +1,132 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mathieu GRENET <mathieu@mgth.fr>
+Date: Thu, 8 Oct 2026 17:03:26 +0200
+Subject: [PATCH 45/45] ad_orender: name render.bridge_paths in the
+ engine-start error
+
+liborender loads several decoder bridges: render.bridge_paths in the
+config (a single render.bridge_path still works), an explicit
+--ad-orender-bridge-path that it splits as a path list, or, with neither,
+every bridge of the first discovery folder that holds one. The error
+printed when orender_create fails still told the user to set
+render.bridge_path, and blamed the bridge even when the engine failed for
+another reason.
+
+The message now points at stderr for the reason and, for a missing
+bridge, names render.bridge_paths, the path-list form of
+--ad-orender-bridge-path and auto-discovery. The option's comment, the
+params struct and the vendored OrenderConfig.bridge_path comment
+(resynced with orender.h) say the same. No behaviour change.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ audio/decode/ad_orender.c | 36 ++++++++++++++++++++++++------------
+ audio/decode/ad_orender.h |  4 ++--
+ common/orender_abi.h      | 12 +++++++-----
+ 3 files changed, 33 insertions(+), 19 deletions(-)
+
+diff --git a/audio/decode/ad_orender.c b/audio/decode/ad_orender.c
+index a3a26dc505..e4add81a14 100644
+--- a/audio/decode/ad_orender.c
++++ b/audio/decode/ad_orender.c
+@@ -21,8 +21,10 @@
+  * Toggling "Spatialize 2D sources" in Studio flips the engine's mode over OSC,
+  * so the switch is applied live, in both directions, with no mpv restart and no
+  * polling — the engine never leaves, never yields the OSC port to the standby
+- * renderer. The bridge and speaker layout come from the shared omniphony config
+- * YAML (render.bridge_path), resolved by liborender when the config path is NULL.
++ * renderer. The bridges and speaker layout come from the shared omniphony config
++ * YAML (render.bridge_paths, or a single render.bridge_path), resolved by
++ * liborender when the config path is NULL; with neither, liborender loads every
++ * decoder bridge of the first folder that holds one.
+  */
+ 
+ #include <inttypes.h>
+@@ -64,6 +66,9 @@ const struct m_sub_options ad_orender_conf = {
+          * loader fails hard instead of falling back — see common/orender_dl.c. */
+         {"library", OPT_STRING(library_path), .flags = M_OPT_FILE},
+         {"config", OPT_STRING(config_path), .flags = M_OPT_FILE},
++        /* One decoder bridge, or several as a path list in the platform's
++         * syntax (':' on Unix, ';' on Windows), in load order. liborender
++         * splits it; empty → render.bridge_paths, then auto-discovery. */
+         {"bridge-path", OPT_STRING(bridge_path), .flags = M_OPT_FILE},
+         {"osc", OPT_BOOL(osc)},
+         {"osc-port", OPT_INT(osc_port), M_RANGE(0, 65535)},
+@@ -1163,18 +1168,25 @@ static struct mp_decoder *create(struct mp_filter *parent,
+ 
+     p->renderer = p->dl->create(&cfg);
+     if (!p->renderer) {
+-        /* The engine could not start (e.g. a bad render.bridge_path). Rather than
+-         * leave the track with no decoder at all, stay selected and decode
+-         * natively for the whole session (host). Spatial is impossible until the
+-         * config is fixed and mpv restarted, but audio still plays. */
++        /* The engine could not start (e.g. no decoder bridge loaded from
++         * render.bridge_paths). Rather than leave the track with no decoder at
++         * all, stay selected and decode natively for the whole session (host).
++         * Spatial is impossible until the config is fixed and mpv restarted,
++         * but audio still plays. */
+ #ifdef _WIN32
+-        MP_ERR(da, "orender_create failed — decoding natively. Set "
+-                   "render.bridge_path in your omniphony config "
+-                   "(%%ProgramData%%\\omniphony\\config.yaml); see stderr.\n");
++        MP_ERR(da, "orender_create failed — decoding natively; the reason "
++                   "is on stderr. If no decoder bridge loaded, list the bridge "
++                   "libraries in render.bridge_paths in your omniphony config "
++                   "(%%ProgramData%%\\omniphony\\config.yaml) or in --ad-orender-bridge-path "
++                   "(a path list), or leave both unset to load every bridge "
++                   "found next to mpv or in the engine's plugin folders.\n");
+ #else
+-        MP_ERR(da, "orender_create failed — decoding natively. Set "
+-                   "render.bridge_path in your omniphony config "
+-                   "(~/.config/omniphony/config.yaml); see stderr.\n");
++        MP_ERR(da, "orender_create failed — decoding natively; the reason "
++                   "is on stderr. If no decoder bridge loaded, list the bridge "
++                   "libraries in render.bridge_paths in your omniphony config "
++                   "(~/.config/omniphony/config.yaml) or in --ad-orender-bridge-path "
++                   "(a path list), or leave both unset to load every bridge "
++                   "found next to mpv or in the engine's plugin folders.\n");
+ #endif
+         p->force_host = true;
+     }
+diff --git a/audio/decode/ad_orender.h b/audio/decode/ad_orender.h
+index fc9d780dbd..e0d40990a6 100644
+--- a/audio/decode/ad_orender.h
++++ b/audio/decode/ad_orender.h
+@@ -19,12 +19,12 @@
+ 
+ /* All paths/hosts default to empty → passed to liborender as NULL, which then
+  * resolves the shared omniphony config (~/.config/omniphony/config.yaml, the
+- * same one the CLI + studio use) for the bridge path, speaker layout, and OSC
++ * same one the CLI + studio use) for the bridge paths, speaker layout, and OSC
+  * settings. These options only override the config per mpv invocation. */
+ struct ad_orender_params {
+     char *library_path;         // explicit liborender path (else search order)
+     char *config_path;          // override render config YAML (else shared default)
+-    char *bridge_path;          // override render.bridge_path
++    char *bridge_path;          // override render.bridge_paths (one path or a path list)
+     bool osc;                   // force OSC on (else follows config render.osc)
+     int osc_port;               // outgoing/monitoring port (0 = config/default)
+     int osc_rx_port;            // incoming control port  (0 = config/default 9000)
+diff --git a/common/orender_abi.h b/common/orender_abi.h
+index d0bb0177e6..aea118461f 100644
+--- a/common/orender_abi.h
++++ b/common/orender_abi.h
+@@ -109,11 +109,13 @@ typedef struct OrenderConfig {
+     // Optional speaker-layout YAML path overriding the config. NULL → use the
+     // config's embedded layout, else the 7.1.4 preset.
+     const char *speaker_layout_path;
+-    // Optional decoder bridge plugin path (the `*_bridge.so` produced by
+-    // the input format's bridge crate) overriding the config. NULL → the
+-    // config YAML's `render.bridge_path`; when that is unset too, the engine
+-    // looks for a `*_bridge.{so,dll,dylib}` next to the host executable, then
+-    // in `$ORENDER_BRIDGE_DIR`, then in the system plugin directory
++    // Optional decoder bridge plugins (the `*_bridge.so` files of the input
++    // formats' bridges) overriding the config: one path, or a path list in
++    // the platform's syntax (`:` on Unix, `;` on Windows), in load order.
++    // NULL → the config YAML's `render.bridge_path(s)`; when that is unset
++    // too, the engine loads every `*_bridge.{so,dll,dylib}` of the first
++    // folder holding one: next to the host executable, then
++    // `$ORENDER_BRIDGE_DIR`, then the system plugin directory
+     // (`/usr/lib/orender` on Unix) — for library hosts as for the CLI. A path
+     // given here or in the config must name an existing file (a relative one
+     // is tried against the working directory, then the executable's

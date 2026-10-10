@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Thu, 1 Oct 2026 16:18:34 +0200
-Subject: [PATCH 39/43] ao_pcm: keep the timed virtual buffer across reset
+Subject: [PATCH 39/45] ao_pcm: keep the timed virtual buffer across reset
 
 What was written to a pipe cannot be taken back: the reader plays it
 out. Emptying the virtual buffer on reset made mpv refill it at once
