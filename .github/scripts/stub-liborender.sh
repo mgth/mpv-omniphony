@@ -43,6 +43,13 @@ int orender_object_count(const OrenderRenderer *r){(void)r;return 0;}
 int orender_dialnorm_db(const OrenderRenderer *r){(void)r;return 0;}
 uint32_t orender_bed_layout(const OrenderRenderer *r,uint8_t *o,uint32_t c){(void)r;(void)o;(void)c;return 0;}
 void orender_reset(OrenderRenderer *r){(void)r;}
+int orender_drain(OrenderRenderer *r,float *o,uintptr_t oc,uintptr_t *nf,uint32_t *nc,int64_t *op){
+    (void)r;(void)o;(void)oc;(void)nc;(void)op;
+    if(nf)*nf=0;
+    return 0;
+}
+int orender_output_packet_pts(const OrenderRenderer *r,int64_t *p){(void)r;(void)p;return 0;}
+uint32_t orender_source_label(const OrenderRenderer *r,char *o,uint32_t c){(void)r;if(o&&c)o[0]=0;return 0;}
 int orender_process(OrenderRenderer *r,const uint8_t *p,size_t pl,int64_t t,
                     float *o,size_t oc,size_t *nf,uint32_t *nc,int64_t *op){
     (void)r;(void)p;(void)pl;(void)t;(void)o;(void)oc;

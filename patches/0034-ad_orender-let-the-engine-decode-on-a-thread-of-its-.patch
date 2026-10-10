@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Tue, 29 Sep 2026 09:33:53 +0200
-Subject: [PATCH 34/41] ad_orender: let the engine decode on a thread of its
+Subject: [PATCH 34/43] ad_orender: let the engine decode on a thread of its
  own when the user asks
 
 The engine (Omniphony, ABI 0.11) can decode on a thread of its own,
