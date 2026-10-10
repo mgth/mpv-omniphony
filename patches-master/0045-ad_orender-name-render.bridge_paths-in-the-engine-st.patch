@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Thu, 8 Oct 2026 17:03:26 +0200
-Subject: [PATCH 45/45] ad_orender: name render.bridge_paths in the
+Subject: [PATCH 45/46] ad_orender: name render.bridge_paths in the
  engine-start error
 
 liborender loads several decoder bridges: render.bridge_paths in the

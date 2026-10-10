@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Mon, 5 Oct 2026 08:59:02 +0200
-Subject: [PATCH 44/45] ad_orender: drop a packet the engine fails on instead
+Subject: [PATCH 44/46] ad_orender: drop a packet the engine fails on instead
  of freezing playback
 
 When orender_process returned an error (the bridge rejecting a damaged

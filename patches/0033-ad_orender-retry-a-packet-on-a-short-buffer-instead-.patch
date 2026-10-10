@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Tue, 29 Sep 2026 08:14:50 +0200
-Subject: [PATCH 33/43] ad_orender: retry a packet on a short buffer instead of
+Subject: [PATCH 33/44] ad_orender: retry a packet on a short buffer instead of
  dropping it
 
 orender_process decodes a packet before it knows whether the output fits,
