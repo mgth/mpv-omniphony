@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Thu, 1 Oct 2026 15:44:54 +0200
-Subject: [PATCH 38/45] ao_pcm: add a timed mode for feeding a pipe at the
+Subject: [PATCH 38/46] ao_pcm: add a timed mode for feeding a pipe at the
  player's pace
 
 --ao-pcm-timed=yes makes the PCM writer behave as an audio device that

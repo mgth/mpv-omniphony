@@ -142,6 +142,7 @@ struct priv {
     int sample_rate;
     int channels;
     struct mp_chmap chmap;
+    uint32_t layout_channels;   // channels of the renderer's layout, as last asked (may exceed MP_NUM_CHANNELS)
     bool checked_spatial;       // built the output chmap for the spatial path
     int last_mapping;           // last orender_channel_mapping() the chmap was built for (live switch)
     /* Widest output layout this stream has produced. The scratch is sized from
@@ -408,11 +409,14 @@ static void refresh_codec_profile(struct priv *p)
 }
 
 /* Build p->chmap from the renderer's output layout. Returns false if any
- * speaker had no mpv mapping (caller still proceeds; positions are NA). */
+ * speaker had no mpv mapping (caller still proceeds; positions are NA), and
+ * leaves the chmap empty when there is no layout or it is wider than an mpv
+ * channel map: p->layout_channels tells which (see no_output_chmap()). */
 static bool build_chmap(struct priv *p)
 {
     uint8_t labels[MP_NUM_CHANNELS];
     uint32_t n = p->dl->channel_layout(p->renderer, labels, MP_NUM_CHANNELS);
+    p->layout_channels = n;
     if (n == 0 || n > MP_NUM_CHANNELS) {
         p->chmap = (struct mp_chmap){0};
         return false;
@@ -436,6 +440,32 @@ static bool build_chmap(struct priv *p)
         p->chmap.speaker[i] = sp;
     }
     return ok;
+}
+
+/* The renderer's output cannot be handed to mpv: build_chmap() left the chmap
+ * empty. Spatial rendering is impossible, so route to the native host decoder
+ * for the rest of the track rather than dropping every frame (which would
+ * freeze audio), and say why.
+ *
+ * Either the renderer reported no output channels (e.g. the speaker layout
+ * could not be resolved), or its layout has more channels than mpv carries:
+ * an mp_chmap holds MP_NUM_CHANNELS of them, and every audio output and
+ * conversion downstream is built on that. The engine itself renders wider
+ * layouts; they are played by the standalone orender renderer, which writes
+ * to its own audio output. */
+static void no_output_chmap(struct mp_filter *da, struct priv *p)
+{
+    if (p->layout_channels > MP_NUM_CHANNELS) {
+        MP_ERR(da, "the speaker layout has %u channels and mpv carries at most "
+                   "%d: decoding natively instead, without spatial rendering "
+                   "(play a layout this wide with the standalone orender "
+                   "renderer)\n", p->layout_channels, MP_NUM_CHANNELS);
+    } else {
+        MP_WARN(da, "renderer reported no output layout; decoding "
+                    "natively instead (check the speaker layout in your "
+                    "omniphony config)\n");
+    }
+    p->force_host = true;
 }
 
 /* Try each entry in `sel` with `fns->create`, stopping at the first success. */
@@ -834,14 +864,7 @@ static void process_spatial(struct mp_filter *da, struct priv *p, bool probe_hos
         p->last_mapping = p->dl->channel_mapping(p->renderer);
         if (!build_chmap(p)) {
             if (p->chmap.num == 0) {
-                /* The renderer reported no output channels (e.g. the speaker
-                 * layout could not be resolved). Spatial rendering is impossible,
-                 * so route to the native host decoder for the rest of the track
-                 * rather than dropping every frame (which would freeze audio). */
-                MP_WARN(da, "renderer reported no output layout; decoding "
-                            "natively instead (check the speaker layout in your "
-                            "omniphony config)\n");
-                p->force_host = true;
+                no_output_chmap(da, p);
                 goto done;
             }
             MP_WARN(da, "output layout has speakers with no mpv mapping\n");
@@ -857,8 +880,15 @@ static void process_spatial(struct mp_filter *da, struct priv *p, bool probe_hos
     if (n_ch > 0 && n_ch != (uint32_t)p->chmap.num) {
         MP_VERBOSE(da, "renderer output changed to %u channels; renegotiating chmap\n",
                    n_ch);
-        if (!build_chmap(p))
+        if (!build_chmap(p)) {
+            if (p->chmap.num == 0) {
+                /* A live switch to a layout mpv cannot carry (or to none):
+                 * the same way out as on the first frame. */
+                no_output_chmap(da, p);
+                goto done;
+            }
             MP_WARN(da, "output layout has speakers with no mpv mapping\n");
+        }
         if (n_ch != (uint32_t)p->chmap.num) {
             /* Safety net: still inconsistent → drop this frame instead of
              * overflowing the plane. */
