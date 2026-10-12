@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Mon, 12 Oct 2026 15:04:07 +0200
-Subject: [PATCH 47/47] demux_mkv: do not apply DiscardPadding to an IAMF track
+Subject: [PATCH 50/50] demux_mkv: do not apply DiscardPadding to an IAMF track
 
 IAMF trims in band: its Audio Frame OBUs carry num_samples_to_trim_at_end
 and the decoder drops those samples itself. The A_IAMF mapping (v0.2) has
