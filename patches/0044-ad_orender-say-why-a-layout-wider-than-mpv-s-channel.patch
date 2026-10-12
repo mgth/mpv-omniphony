@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Sat, 10 Oct 2026 13:33:00 +0200
-Subject: [PATCH 44/46] ad_orender: say why a layout wider than mpv's channel
+Subject: [PATCH 44/47] ad_orender: say why a layout wider than mpv's channel
  maps is not rendered
 
 The engine no longer limits the width of a speaker layout (Omniphony #745),

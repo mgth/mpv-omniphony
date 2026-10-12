@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Mon, 12 Oct 2026 13:36:26 +0200
-Subject: [PATCH 45/46] ad_iamf_iec61937: carry an IAMF track as IEC 61937
+Subject: [PATCH 45/47] ad_iamf_iec61937: carry an IAMF track as IEC 61937
  bursts
 
 `--ad=iamf-iec61937` decodes nothing: each temporal unit of an IAMF track

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mathieu GRENET <mathieu@mgth.fr>
 Date: Mon, 12 Oct 2026 15:04:07 +0200
-Subject: [PATCH 46/46] demux_mkv: do not apply DiscardPadding to an IAMF track
+Subject: [PATCH 47/47] demux_mkv: do not apply DiscardPadding to an IAMF track
 
 IAMF trims in band: its Audio Frame OBUs carry num_samples_to_trim_at_end
 and the decoder drops those samples itself. The A_IAMF mapping (v0.2) has
@@ -10,6 +10,8 @@ players that cannot decode the track; a player that does decode it must
 apply one of the two, never both. Keep the decoder's trimming and ignore
 the container's for the iamf codec. CodecDelay is still subtracted from
 the timestamps, which only places the first kept sample at 0, as for Opus.
+
+(cherry picked from commit 78c2159f6088aa1ca684b66193ebfbf284997904)
 ---
  demux/demux_mkv.c | 13 +++++++++++--
  1 file changed, 11 insertions(+), 2 deletions(-)

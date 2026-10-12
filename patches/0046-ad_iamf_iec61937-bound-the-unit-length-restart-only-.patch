@@ -1,0 +1,173 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mathieu GRENET <mathieu@mgth.fr>
+Date: Mon, 12 Oct 2026 16:47:08 +0200
+Subject: [PATCH 46/47] ad_iamf_iec61937: bound the unit length, restart only
+ on a burst that reaches the output
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two findings from the review of the regenerated patch sets
+(mgth/mpv-omniphony#87):
+
+A codec config may state a num_samples_per_frame up to UINT32_MAX, which
+went straight into the int period_frames: past INT_MAX it turned
+negative, the frame pool allocated for one sample, and process() wrote a
+period of (size_t)negative bytes over it. The count and the pool's
+aligned byte products are now bounded against INT_MAX at init, and such
+a track is refused with a message.
+
+After a seek the player drops the frames that end before its target —
+whole, since an IEC 61937 frame is never cut — and the decoder cleared
+its restart on the first burst it produced, which was one of those: the
+receiver then got a stream without descriptors until the next redundant
+copy, or never with --ad-iamf-iec61937-copy-interval=0. The decoder
+wrapper now hands decoders the time the output drops frames before
+(VDCTRL_SET_START_PTS, beside VDCTRL_SET_FRAMEDROP), and the carrier
+keeps the descriptors on every burst until one that ends after that time
+has gone out.
+
+Checked with a 50 s Opus stream (the test_000220 units repeated): seeks
+to 12.5, 12.53 and 27.31 s delivered no descriptors before, one burst
+with them first now; a seek onto a cue (40 s) still carries them exactly
+once; with the default copy interval a seek to 12.53 gives the restart
+and then a copy a second; playback from the start is unchanged. A track
+stating 2^31 samples a unit crashed with SIGSEGV before and is refused
+now. Nothing has been listened to.
+---
+ audio/decode/ad_iamf_iec61937.c | 49 +++++++++++++++++++++++++++++++--
+ filters/f_decoder_wrapper.c     |  1 +
+ filters/f_decoder_wrapper.h     |  4 +++
+ 3 files changed, 51 insertions(+), 3 deletions(-)
+
+diff --git a/audio/decode/ad_iamf_iec61937.c b/audio/decode/ad_iamf_iec61937.c
+index 608df2bc2e..cbd63e3f47 100644
+--- a/audio/decode/ad_iamf_iec61937.c
++++ b/audio/decode/ad_iamf_iec61937.c
+@@ -25,6 +25,7 @@
+  */
+ 
+ #include <inttypes.h>
++#include <limits.h>
+ #include <stdbool.h>
+ #include <stdint.h>
+ #include <string.h>
+@@ -89,11 +90,16 @@ struct priv {
+     uint8_t *redundant;
+     size_t descriptors_len;
+ 
++    int rate;               // carrier frames a second
+     int sstride;            // bytes per carrier frame
+     int period_frames;      // carrier frames one unit lasts
+     int copy_every;         // units between redundant copies, 0: none
+     int since_copy;         // units since the descriptors last went out
+     bool restart;           // the next burst opens the sequence
++    /* After a seek the player drops the frames that end before its target
++     * — whole, since an IEC 61937 frame is never cut — so a burst that ends
++     * before it never reaches the receiver. MP_NOPTS_VALUE: none dropped. */
++    double start_pts;
+     uint64_t too_long;      // units that did not fit their period
+     struct mp_decoder public;
+ };
+@@ -247,8 +253,17 @@ static void process(struct mp_filter *da)
+             memcpy(burst + BURST_HEADER_BYTES, lead, lead_len);
+         memcpy(burst + BURST_HEADER_BYTES + lead_len, mpkt->buffer, mpkt->len);
+         if (lead) {
+-            p->since_copy = 0;
+-            p->restart = false;
++            /* The descriptors that open the sequence count only once a
++             * burst carrying them reaches the output: one the player drops
++             * after a seek would leave the receiver without them, so the
++             * next burst carries them again. */
++            bool reaches = p->start_pts == MP_NOPTS_VALUE ||
++                           mpkt->pts == MP_NOPTS_VALUE ||
++                           mpkt->pts + (double)p->period_frames / p->rate > p->start_pts;
++            if (reaches) {
++                p->since_copy = 0;
++                p->restart = false;
++            }
+         }
+     }
+     p->since_copy++;
+@@ -270,6 +285,16 @@ static void reset(struct mp_filter *da)
+     p->restart = true;
+ }
+ 
++static int control(struct mp_filter *da, enum dec_ctrl cmd, void *arg)
++{
++    struct priv *p = da->priv;
++    if (cmd == VDCTRL_SET_START_PTS) {
++        p->start_pts = *(double *)arg;
++        return CONTROL_OK;
++    }
++    return CONTROL_UNKNOWN;
++}
++
+ static const struct mp_filter_info ad_iamf_iec61937_filter = {
+     .name = "ad_iamf_iec61937",
+     .priv_size = sizeof(struct priv),
+@@ -326,10 +351,27 @@ static struct mp_decoder *create(struct mp_filter *parent,
+     p->codec = codec;
+     p->pool = mp_aframe_pool_create(p);
+     p->public.f = da;
++    p->public.control = control;
++    p->start_pts = MP_NOPTS_VALUE;
+ 
+     struct ad_iamf_iec61937_params *opts =
+         mp_get_config_group(da, da->global, &ad_iamf_iec61937_conf);
+ 
++    /* The frame pool sizes a period in int arithmetic — the samples aligned
++     * to 32, the bytes to 64 — and process() takes frames x stride as the
++     * burst's length: bound the count and the products before anything is
++     * sized by them, or a stated count past INT_MAX turns negative. */
++    int sstride = opts->channels * 2;
++    uint64_t aligned = MP_ALIGN_UP((uint64_t)unit_samples, 32);
++    if (unit_samples > (uint32_t)(INT_MAX - 32) ||
++        MP_ALIGN_UP(aligned * (uint64_t)sstride, 64) > (uint64_t)INT_MAX)
++    {
++        MP_ERR(da, "IAMF units of %" PRIu32 " samples do not fit a carrier "
++                   "period on %d channels\n", unit_samples, opts->channels);
++        talloc_free(da);
++        return NULL;
++    }
++
+     p->descriptors_len = desc_len;
+     p->descriptors = talloc_memdup(p, (void *)desc, desc_len);
+     p->redundant = talloc_memdup(p, (void *)desc, desc_len);
+@@ -347,7 +389,8 @@ static struct mp_decoder *create(struct mp_filter *parent,
+ 
+     struct mp_chmap chmap;
+     mp_chmap_set_unknown(&chmap, opts->channels);
+-    p->sstride = opts->channels * 2;
++    p->rate = rate;
++    p->sstride = sstride;
+     p->period_frames = unit_samples;
+     p->restart = true;
+     if (opts->copy_interval_ms) {
+diff --git a/filters/f_decoder_wrapper.c b/filters/f_decoder_wrapper.c
+index 4aa341e7d3..ec05a1f290 100644
+--- a/filters/f_decoder_wrapper.c
++++ b/filters/f_decoder_wrapper.c
+@@ -994,6 +994,7 @@ static void feed_packet(struct priv *p)
+             framedrop_type = 2;
+ 
+         p->decoder->control(p->decoder->f, VDCTRL_SET_FRAMEDROP, &framedrop_type);
++        p->decoder->control(p->decoder->f, VDCTRL_SET_START_PTS, &start_pts);
+     }
+ 
+     if (!p->dec_dispatch && p->public.recorder_sink)
+diff --git a/filters/f_decoder_wrapper.h b/filters/f_decoder_wrapper.h
+index 06c6b144be..474303d92b 100644
+--- a/filters/f_decoder_wrapper.h
++++ b/filters/f_decoder_wrapper.h
+@@ -75,6 +75,10 @@ enum dec_ctrl {
+     // framedrop mode: 0=none, 1=standard, 2=hrseek
+     VDCTRL_SET_FRAMEDROP,
+     VDCTRL_CHECK_FORCED_EOF,
++    // The time the output drops frames before after a seek (double *),
++    // MP_NOPTS_VALUE when none: a decoder whose frames carry state the
++    // receiver must not miss can tell which frame reaches the output.
++    VDCTRL_SET_START_PTS,
+ };
+ 
+ int mp_decoder_wrapper_control(struct mp_decoder_wrapper *d,
