@@ -32,6 +32,17 @@ Studio) is picked up without rebuilding mpv. The library search order and the
 `--ad-orender-library` option are documented in the
 [usage guide](https://github.com/mgth/Omniphony/blob/main/docs/mpv-omniphony.md).
 
+> **Limit: 64 output channels.** Through mpv, a speaker layout can have at most
+> 64 speakers (LFE and non-spatialized ones included). The engine has no such
+> limit; mpv does: the rendered audio goes back through mpv's audio chain, whose
+> channel maps hold 64 channels (`MP_NUM_CHANNELS`), and FFmpeg's resampler
+> behind its conversions stops there too. With a wider layout `ad_orender` says
+> so and the track plays through mpv's native decoder, without spatial
+> rendering. This limit is accepted for this frontend: play a wider layout with
+> the engine's standalone `orender` renderer, which writes to its own audio
+> output. Details in the
+> [usage guide](https://github.com/mgth/Omniphony/blob/main/docs/mpv-omniphony.md#limit-64-output-channels).
+
 ## Layout
 
 ```

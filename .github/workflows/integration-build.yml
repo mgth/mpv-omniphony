@@ -137,7 +137,24 @@ jobs:
           # dead_code in particular fires on liborender's dormant
           # artifact-evaluator path, which is reachable only through code the
           # FFI build never links.
-          RUSTFLAGS: -D warnings -A dead_code
+          #
+          # +crt-static: the C runtime linked into orender.dll, so the player
+          # starts on a Windows without the Visual C++ Redistributable. This
+          # RUSTFLAGS replaces Omniphony's .cargo/config.toml, which sets it
+          # for its own builds (mgth/Omniphony#787), so it is repeated here.
+          RUSTFLAGS: -D warnings -A dead_code -C target-feature=+crt-static
+
+      # Fails if orender.dll imports the Visual C++ runtime. The script comes
+      # with the Omniphony checkout from mgth/Omniphony#787 on; an older
+      # OMNIPHONY_REF skips the check.
+      - name: Check orender.dll needs no Visual C++ runtime
+        shell: bash
+        run: |
+          if [ -f scripts/check_windows_crt_imports.py ]; then
+            python scripts/check_windows_crt_imports.py omniphony-renderer/target/release/orender.dll
+          else
+            echo "scripts/check_windows_crt_imports.py not in this Omniphony ref: check skipped"
+          fi
 
       - name: Stage artifact
         shell: pwsh
