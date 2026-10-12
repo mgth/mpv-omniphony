@@ -1,0 +1,663 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mathieu GRENET <mathieu@mgth.fr>
+Date: Mon, 12 Oct 2026 13:36:26 +0200
+Subject: [PATCH 45/46] ad_iamf_iec61937: carry an IAMF track as IEC 61937
+ bursts
+
+`--ad=iamf-iec61937` decodes nothing: each temporal unit of an IAMF track
+goes out as one burst of a private IEC 61937 data type (0x1D), on a
+PCM-shaped carrier of 16-bit words at the track's rate, for an Omniphony
+renderer at the other end of a link that carries PCM and so a clock
+(Omniphony docs/iamf-transport-plan.md). The IEC assigned IAMF no data
+type: no other equipment knows this one.
+
+The burst period is the unit's duration in carrier frames, so the frames
+keep their time and A/V sync works as with any output. The descriptors
+from CodecPrivate lead the first burst and the first after a seek, as
+they are, which opens a new sequence at the receiver; a copy with
+obu_redundant_copy set leads one every --ad-iamf-iec61937-copy-interval
+(1 s), for a receiver that joins late. The payload length goes on in Pc
+bits 8-12 past the 65 535 bytes Pd counts. A unit longer than its period
+leaves the period empty and says to widen the carrier
+(--ad-iamf-iec61937-channels, 8 by default).
+
+The frames are a compressed format, AF_FORMAT_S_IAMF, so no filter,
+volume or resampler touches the words. af_fmt_is_spdif() tells the
+compressed formats by their range rather than by a burst alignment,
+which this one does not have.
+
+- ao_pcm keeps the carrier's channel count instead of fitting it to a
+  speaker layout.
+- ao_pipewire presents the words as that many unpositioned S16 channels,
+  with remixing, resampling, dither and restored volume off. It refuses
+  the default sink and any fallback: on a loudspeaker the words are
+  full-scale noise.
+
+Checked against `orender wrap-iec61937`, which writes the same stream
+from a standalone IAMF file: byte-identical through ao_pcm on Opus, FLAC
+and object encodings at 2, 8, 16 and 24 channels. Through PipeWire into
+a null sink and back from its monitor, 600 bursts of 600 came back
+intact.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ audio/decode/ad_iamf_iec61937.c | 383 ++++++++++++++++++++++++++++++++
+ audio/decode/ad_iamf_iec61937.h |  17 ++
+ audio/format.c                  |   3 +-
+ audio/format.h                  |   3 +
+ audio/out/ao_pcm.c              |  12 +-
+ audio/out/ao_pipewire.c         |  41 +++-
+ filters/f_decoder_wrapper.c     |  14 ++
+ filters/f_decoder_wrapper.h     |   1 +
+ meson.build                     |   3 +-
+ options/options.c               |   2 +
+ options/options.h               |   1 +
+ 11 files changed, 473 insertions(+), 7 deletions(-)
+ create mode 100644 audio/decode/ad_iamf_iec61937.c
+ create mode 100644 audio/decode/ad_iamf_iec61937.h
+
+diff --git a/audio/decode/ad_iamf_iec61937.c b/audio/decode/ad_iamf_iec61937.c
+new file mode 100644
+index 0000000000..608df2bc2e
+--- /dev/null
++++ b/audio/decode/ad_iamf_iec61937.c
+@@ -0,0 +1,383 @@
++/*
++ * ad_iamf_iec61937.c — carry an IAMF track as IEC 61937 bursts.
++ *
++ * Opt in with `--ad=iamf-iec61937` on an IAMF track. Nothing is decoded: each
++ * temporal unit (one Matroska block) goes out as one burst of a private IEC
++ * 61937 data type, on a PCM-shaped carrier of 16-bit words, for an Omniphony
++ * renderer at the other end of a link that carries PCM and with it a clock
++ * (Omniphony docs/iamf-transport-plan.md). No other equipment knows the type:
++ * the IEC assigned IAMF none.
++ *
++ * A burst is Pa Pb Pc Pd, the payload, and zeros up to the repetition period,
++ * which is the unit's duration in carrier frames, so the carrier's position
++ * is the stream's time and mpv's A/V sync works as with any output. The
++ * payload is the unit's OBUs, preceded by the sequence's descriptors: as they
++ * are when the stream (re)starts, which opens a new sequence at the receiver,
++ * and as a redundant copy every so often, for a receiver that joins late.
++ *
++ * The frames are flagged as a compressed format (AF_FORMAT_S_IAMF), so no
++ * filter, volume or resampler touches the words. The carrier is
++ * --ad-iamf-iec61937-channels wide at the track's own rate; a unit longer
++ * than its period needs a wider one.
++ *
++ * The same stream is written by `orender wrap-iec61937` from a standalone
++ * IAMF file (Omniphony's spdif crate), byte for byte.
++ */
++
++#include <inttypes.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <string.h>
++
++#include "audio/aframe.h"
++#include "audio/chmap.h"
++#include "audio/format.h"
++#include "common/codecs.h"
++#include "common/common.h"
++#include "common/msg.h"
++#include "demux/packet.h"
++#include "demux/stheader.h"
++#include "filters/f_decoder_wrapper.h"
++#include "filters/filter_internal.h"
++#include "options/m_config.h"
++#include "options/m_option.h"
++#include "options/options.h"
++
++#include "ad_iamf_iec61937.h"
++
++#define OPT_BASE_STRUCT struct ad_iamf_iec61937_params
++
++const struct m_sub_options ad_iamf_iec61937_conf = {
++    .opts = (const m_option_t[]) {
++        /* Carrier width: its byte rate is channels x rate x 2. */
++        {"channels", OPT_INT(channels), M_RANGE(1, MP_NUM_CHANNELS)},
++        /* How often a redundant copy of the descriptors is carried, for a
++         * receiver that joins late; 0 carries none. */
++        {"copy-interval", OPT_INT(copy_interval_ms), M_RANGE(0, 60000)},
++        {0}
++    },
++    .size = sizeof(struct ad_iamf_iec61937_params),
++    .defaults = &(const struct ad_iamf_iec61937_params){
++        .channels = 8,
++        .copy_interval_ms = 1000,
++    },
++};
++
++/* IEC 61937 preamble, as little-endian 16-bit words. */
++#define SYNCWORD_PA 0xF872
++#define SYNCWORD_PB 0x4E1F
++/* The private data type (Pc bits 0-4): spdif::DATA_TYPE_IAMF_PRIVATE. */
++#define DATA_TYPE_IAMF_PRIVATE 0x1D
++#define BURST_HEADER_BYTES 8
++/* Pd holds the low 16 bits of the payload length, Pc bits 8-12 the next
++ * five. */
++#define MAX_PAYLOAD_BYTES ((1 << 21) - 1)
++
++#define OBU_CODEC_CONFIG 0
++#define OBU_REDUNDANT_COPY 0x04
++#define OBU_EXTENSION 0x01
++
++struct priv {
++    struct mp_log *log;
++    struct mp_codec_params *codec;
++    struct mp_aframe *fmt;
++    struct mp_aframe_pool *pool;
++
++    /* The sequence's descriptor OBUs, as CodecPrivate has them, and the
++     * same with obu_redundant_copy set on each. */
++    uint8_t *descriptors;
++    uint8_t *redundant;
++    size_t descriptors_len;
++
++    int sstride;            // bytes per carrier frame
++    int period_frames;      // carrier frames one unit lasts
++    int copy_every;         // units between redundant copies, 0: none
++    int since_copy;         // units since the descriptors last went out
++    bool restart;           // the next burst opens the sequence
++    uint64_t too_long;      // units that did not fit their period
++    struct mp_decoder public;
++};
++
++/* A leb128 of at most 8 bytes at data[0..len): its value in *out, the bytes
++ * it took as the return value, 0 when it does not end. */
++static int leb128(const uint8_t *data, size_t len, uint64_t *out)
++{
++    uint64_t value = 0;
++    for (int n = 0; n < 8 && (size_t)n < len; n++) {
++        value |= (uint64_t)(data[n] & 0x7F) << (7 * n);
++        if (!(data[n] & 0x80)) {
++            *out = value;
++            return n + 1;
++        }
++    }
++    return 0;
++}
++
++/* The OBU at data[0..len): its whole length, 0 when it is cut short. The
++ * body's offset goes to *body. */
++static size_t obu_len(const uint8_t *data, size_t len, size_t *body)
++{
++    uint64_t size;
++    int n = len ? leb128(data + 1, len - 1, &size) : 0;
++    if (!n || size > len - 1 - n)
++        return 0;
++    *body = 1 + n;
++    return 1 + n + (size_t)size;
++}
++
++/* What the first codec config states: num_samples_per_frame, and the sample
++ * rate when the codec's own config says it (0 otherwise). */
++static bool unit_timing(const uint8_t *desc, size_t len, uint32_t *samples,
++                        uint32_t *rate)
++{
++    for (size_t pos = 0; pos < len;) {
++        size_t body;
++        size_t obu = obu_len(desc + pos, len - pos, &body);
++        if (!obu)
++            return false;
++        if (desc[pos] >> 3 == OBU_CODEC_CONFIG) {
++            const uint8_t *b = desc + pos + body;
++            size_t b_len = obu - body;
++            uint64_t v;
++            int n;
++            if (desc[pos] & OBU_EXTENSION) {
++                if (!(n = leb128(b, b_len, &v)) || v > b_len - n)
++                    return false;
++                b += n + v;
++                b_len -= n + v;
++            }
++            if (!(n = leb128(b, b_len, &v)) || b_len - n < 4)
++                return false;
++            const uint8_t *codec_id = b + n;
++            b += n + 4;
++            b_len -= n + 4;
++            if (!(n = leb128(b, b_len, &v)) || v == 0 || v > UINT32_MAX)
++                return false;
++            *samples = v;
++            /* audio_roll_distance, then the codec's own config. */
++            b += n + 2;
++            b_len = b_len >= (size_t)n + 2 ? b_len - n - 2 : 0;
++            *rate = 0;
++            if (memcmp(codec_id, "Opus", 4) == 0) {
++                *rate = 48000;
++            } else if (memcmp(codec_id, "ipcm", 4) == 0 && b_len >= 6) {
++                /* sample_format_flags, sample_size, sample_rate. */
++                *rate = (uint32_t)b[2] << 24 | b[3] << 16 | b[4] << 8 | b[5];
++            } else if (memcmp(codec_id, "fLaC", 4) == 0 && b_len >= 17) {
++                /* A METADATA_BLOCK header, then STREAMINFO: block and frame
++                 * sizes (10 bytes), then the rate on 20 bits. */
++                *rate = (uint32_t)b[14] << 12 | b[15] << 4 | b[16] >> 4;
++            }
++            return true;
++        }
++        pos += obu;
++    }
++    return false;
++}
++
++static void put16le(uint8_t *out, unsigned v)
++{
++    out[0] = v & 0xFF;
++    out[1] = v >> 8;
++}
++
++static void process(struct mp_filter *da)
++{
++    struct priv *p = da->priv;
++
++    if (!mp_pin_can_transfer_data(da->ppins[1], da->ppins[0]))
++        return;
++
++    struct mp_frame inframe = mp_pin_out_read(da->ppins[0]);
++    if (inframe.type == MP_FRAME_EOF) {
++        mp_pin_in_write(da->ppins[1], inframe);
++        return;
++    } else if (inframe.type != MP_FRAME_PACKET) {
++        if (inframe.type) {
++            MP_ERR(da, "unknown frame type\n");
++            mp_filter_internal_mark_failed(da);
++        }
++        return;
++    }
++
++    struct demux_packet *mpkt = inframe.data;
++    struct mp_aframe *out = mp_aframe_new_ref(p->fmt);
++    if (mp_aframe_pool_allocate(p->pool, out, p->period_frames) < 0) {
++        TA_FREEP(&out);
++        goto done;
++    }
++    uint8_t **data = mp_aframe_get_data_rw(out);
++    if (!data) {
++        TA_FREEP(&out);
++        goto done;
++    }
++    uint8_t *burst = data[0];
++    size_t period = (size_t)p->period_frames * p->sstride;
++    memset(burst, 0, period);
++
++    /* The descriptors as they are open a new sequence at the receiver: at
++     * the start, and after a seek, where its decoder starts afresh. A copy
++     * is skipped by a receiver that has the sequence. */
++    const uint8_t *lead = NULL;
++    if (p->restart) {
++        lead = p->descriptors;
++    } else if (p->copy_every && p->since_copy >= p->copy_every) {
++        lead = p->redundant;
++    }
++    size_t lead_len = lead ? p->descriptors_len : 0;
++    size_t payload = lead_len + mpkt->len;
++
++    if (payload > MAX_PAYLOAD_BYTES || BURST_HEADER_BYTES + payload > period) {
++        /* The period goes out empty: the carrier keeps its time, the
++         * receiver hears a gap. */
++        if (!(p->too_long & (p->too_long + 1))) {
++            MP_ERR(da, "a unit of %zu bytes does not fit its %zu-byte period "
++                       "on %d channels: raise --ad-iamf-iec61937-channels "
++                       "(%" PRIu64 " so far)\n",
++                   payload, period, p->sstride / 2, p->too_long + 1);
++        }
++        p->too_long++;
++    } else {
++        put16le(burst, SYNCWORD_PA);
++        put16le(burst + 2, SYNCWORD_PB);
++        burst[4] = DATA_TYPE_IAMF_PRIVATE;
++        burst[5] = (payload >> 16) & 0x1F;
++        put16le(burst + 6, payload & 0xFFFF);
++        if (lead)
++            memcpy(burst + BURST_HEADER_BYTES, lead, lead_len);
++        memcpy(burst + BURST_HEADER_BYTES + lead_len, mpkt->buffer, mpkt->len);
++        if (lead) {
++            p->since_copy = 0;
++            p->restart = false;
++        }
++    }
++    p->since_copy++;
++    mp_aframe_set_pts(out, mpkt->pts);
++
++done:
++    talloc_free(mpkt);
++    if (out) {
++        mp_pin_in_write(da->ppins[1], MAKE_FRAME(MP_FRAME_AUDIO, out));
++    } else {
++        mp_filter_internal_mark_failed(da);
++    }
++}
++
++/* A seek: what follows does not continue what was sent. */
++static void reset(struct mp_filter *da)
++{
++    struct priv *p = da->priv;
++    p->restart = true;
++}
++
++static const struct mp_filter_info ad_iamf_iec61937_filter = {
++    .name = "ad_iamf_iec61937",
++    .priv_size = sizeof(struct priv),
++    .process = process,
++    .reset = reset,
++};
++
++static struct mp_decoder *create(struct mp_filter *parent,
++                                 struct mp_codec_params *codec,
++                                 const char *decoder)
++{
++    if (!codec->codec || strcmp(codec->codec, "iamf") != 0)
++        return NULL;
++
++    /* IAMF extradata is the IAConfigurationBox payload: version 1, a leb128
++     * size, then the descriptor OBUs. */
++    const uint8_t *x = codec->extradata;
++    size_t x_len = codec->extradata_size;
++    uint64_t size = 0;
++    int n = x && x_len > 1 && x[0] == 1 ? leb128(x + 1, x_len - 1, &size) : 0;
++    if (!n || size == 0 || size > x_len - 1 - n) {
++        mp_err(parent->log, "IAMF track without a usable configuration "
++                            "(CodecPrivate must be IAConfigurationBox "
++                            "version 1)\n");
++        return NULL;
++    }
++    const uint8_t *desc = x + 1 + n;
++    size_t desc_len = size;
++
++    uint32_t unit_samples, stated_rate;
++    if (!unit_timing(desc, desc_len, &unit_samples, &stated_rate)) {
++        mp_err(parent->log, "IAMF configuration without a readable codec "
++                            "config\n");
++        return NULL;
++    }
++    /* The carrier runs at the stream's rate: a unit is that many frames. */
++    int rate = stated_rate ? stated_rate : codec->samplerate;
++    if (rate <= 0) {
++        mp_err(parent->log, "IAMF track without a sample rate\n");
++        return NULL;
++    }
++
++    struct mp_filter *da = mp_filter_create(parent, &ad_iamf_iec61937_filter);
++    if (!da)
++        return NULL;
++
++    mp_filter_add_pin(da, MP_PIN_IN, "in");
++    mp_filter_add_pin(da, MP_PIN_OUT, "out");
++
++    da->log = mp_log_new(da, parent->log, NULL);
++
++    struct priv *p = da->priv;
++    p->log = da->log;
++    p->codec = codec;
++    p->pool = mp_aframe_pool_create(p);
++    p->public.f = da;
++
++    struct ad_iamf_iec61937_params *opts =
++        mp_get_config_group(da, da->global, &ad_iamf_iec61937_conf);
++
++    p->descriptors_len = desc_len;
++    p->descriptors = talloc_memdup(p, (void *)desc, desc_len);
++    p->redundant = talloc_memdup(p, (void *)desc, desc_len);
++    for (size_t pos = 0; pos < desc_len;) {
++        size_t body;
++        size_t obu = obu_len(p->redundant + pos, desc_len - pos, &body);
++        if (!obu) {
++            MP_ERR(da, "IAMF configuration is not whole OBUs\n");
++            talloc_free(da);
++            return NULL;
++        }
++        p->redundant[pos] |= OBU_REDUNDANT_COPY;
++        pos += obu;
++    }
++
++    struct mp_chmap chmap;
++    mp_chmap_set_unknown(&chmap, opts->channels);
++    p->sstride = opts->channels * 2;
++    p->period_frames = unit_samples;
++    p->restart = true;
++    if (opts->copy_interval_ms) {
++        int64_t units = ((int64_t)opts->copy_interval_ms * rate + 500LL * unit_samples) /
++                        (1000LL * unit_samples);
++        p->copy_every = MPCLAMP(units, 1, INT32_MAX);
++    }
++
++    p->fmt = mp_aframe_create();
++    talloc_steal(p, p->fmt);
++    mp_aframe_set_chmap(p->fmt, &chmap);
++    mp_aframe_set_format(p->fmt, AF_FORMAT_S_IAMF);
++    mp_aframe_set_rate(p->fmt, rate);
++
++    MP_INFO(da, "IAMF as IEC 61937 bursts: %u-sample units on %d ch at %d Hz "
++                "(%d-byte period, %d kbit/s), descriptors (%zu bytes) every "
++                "%d unit(s)\n",
++            unit_samples, opts->channels, rate, p->period_frames * p->sstride,
++            p->sstride * rate / 125, desc_len, p->copy_every);
++
++    return &p->public;
++}
++
++static void add_decoders(struct mp_decoder_list *list)
++{
++    mp_add_decoder(list, "iamf", "iamf-iec61937",
++                   "IAMF as private IEC 61937 bursts, for an Omniphony renderer");
++}
++
++const struct mp_decoder_fns ad_iamf_iec61937 = {
++    .create = create,
++    .add_decoders = add_decoders,
++};
+diff --git a/audio/decode/ad_iamf_iec61937.h b/audio/decode/ad_iamf_iec61937.h
+new file mode 100644
+index 0000000000..f2d393432e
+--- /dev/null
++++ b/audio/decode/ad_iamf_iec61937.h
+@@ -0,0 +1,17 @@
++/*
++ * Options of the IAMF IEC 61937 carrier (audio/decode/ad_iamf_iec61937.c).
++ */
++
++#ifndef MP_AD_IAMF_IEC61937_H
++#define MP_AD_IAMF_IEC61937_H
++
++#include "options/m_option.h"
++
++struct ad_iamf_iec61937_params {
++    int channels;           // carrier width
++    int copy_interval_ms;   // redundant descriptor copies, 0: none
++};
++
++extern const struct m_sub_options ad_iamf_iec61937_conf;
++
++#endif
+diff --git a/audio/format.c b/audio/format.c
+index 4441456ede..c643a07975 100644
+--- a/audio/format.c
++++ b/audio/format.c
+@@ -58,7 +58,7 @@ bool af_fmt_is_int(int format)
+ 
+ bool af_fmt_is_spdif(int format)
+ {
+-    return af_format_sample_alignment(format) > 1;
++    return format >= AF_FORMAT_S_AAC && format <= AF_FORMAT_S_IAMF;
+ }
+ 
+ bool af_fmt_is_pcm(int format)
+@@ -135,6 +135,7 @@ const char *af_fmt_to_str(int format)
+     case AF_FORMAT_S_EAC3:      return "spdif-eac3";
+     case AF_FORMAT_S_MP3:       return "spdif-mp3";
+     case AF_FORMAT_S_TRUEHD:    return "spdif-truehd";
++    case AF_FORMAT_S_IAMF:      return "spdif-iamf";
+     }
+     return "??";
+ }
+diff --git a/audio/format.h b/audio/format.h
+index bdd4744ae3..d891c1b9ce 100644
+--- a/audio/format.h
++++ b/audio/format.h
+@@ -47,6 +47,9 @@ enum af_format {
+     AF_FORMAT_S_EAC3,
+     AF_FORMAT_S_MP3,
+     AF_FORMAT_S_TRUEHD,
++    // IAMF as bursts of a private data type, one temporal unit each: the
++    // burst period is the stream's, not the format's (ad_iamf_iec61937.c).
++    AF_FORMAT_S_IAMF,
+ 
+     AF_FORMAT_COUNT
+ };
+diff --git a/audio/out/ao_pcm.c b/audio/out/ao_pcm.c
+index 7b3da2ff06..32c77642c5 100644
+--- a/audio/out/ao_pcm.c
++++ b/audio/out/ao_pcm.c
+@@ -155,10 +155,14 @@ static int init(struct ao *ao)
+         }
+     }
+ 
+-    struct mp_chmap_sel sel = {0};
+-    mp_chmap_sel_add_waveext(&sel);
+-    if (!ao_chmap_sel_adjust(ao, &sel, &ao->channels))
+-        return -1;
++    // An IAMF carrier's channels are 16-bit words of a bitstream, not
++    // speakers: they keep their count and have no layout to adjust to.
++    if (ao->format != AF_FORMAT_S_IAMF) {
++        struct mp_chmap_sel sel = {0};
++        mp_chmap_sel_add_waveext(&sel);
++        if (!ao_chmap_sel_adjust(ao, &sel, &ao->channels))
++            return -1;
++    }
+ 
+     ao->bps = ao->channels.num * (int64_t)ao->samplerate * af_fmt_to_bytes(ao->format);
+ 
+diff --git a/audio/out/ao_pipewire.c b/audio/out/ao_pipewire.c
+index 4ffe1b8657..141ae4a19e 100644
+--- a/audio/out/ao_pipewire.c
++++ b/audio/out/ao_pipewire.c
+@@ -602,7 +602,46 @@ static int init(struct ao *ao)
+ 
+     pw_properties_setf(props, PW_KEY_NODE_RATE, "1/%d", ao->samplerate);
+ 
+-    if (af_fmt_is_spdif(ao->format)) {
++    if (ao->format == AF_FORMAT_S_IAMF) {
++        // IAMF bursts of a private IEC 61937 type: PipeWire has no codec for
++        // them, and the link they are meant for carries PCM. Present the
++        // 16-bit words as that many channels of S16, positionless, and ask
++        // for nothing to be done to them: any mixing, resampling, dither or
++        // volume changes the words. The far end has to match the rate.
++        struct spa_audio_info_raw audio_info = {
++            .format = SPA_AUDIO_FORMAT_S16_LE,
++            .flags = SPA_AUDIO_FLAG_UNPOSITIONED,
++            .rate = ao->samplerate,
++            .channels = ao->channels.num,
++        };
++        for (int i = 0; i < ao->channels.num; i++)
++            audio_info.position[i] = SPA_AUDIO_CHANNEL_AUX0 + i;
++
++        // On a loudspeaker these words are full-scale noise. They go to the
++        // sink the user named and to no other: not the default one, and not
++        // whichever the session manager would move the stream to when that
++        // sink is missing or goes away.
++        if (!ao->device || !ao->device[0]) {
++            MP_ERR(ao, "IAMF bursts need an explicit sink: name the carrier "
++                       "with --audio-device=pipewire/<sink> (they are noise "
++                       "on a loudspeaker, so the default sink is refused)\n");
++            goto error_props;
++        }
++        pw_properties_set(props, "node.dont-fallback", "true");
++        pw_properties_set(props, PW_KEY_NODE_DONT_RECONNECT, "true");
++
++        pw_properties_set(props, PW_KEY_STREAM_DONT_REMIX, "true");
++        pw_properties_set(props, "channelmix.disable", "true");
++        pw_properties_set(props, "resample.disable", "true");
++        pw_properties_set(props, "dither.noise", "0");
++        pw_properties_set(props, "dither.method", "none");
++        // No remembered volume, mute or target for these words.
++        pw_properties_set(props, "state.restore-props", "false");
++
++        params[0] = spa_format_audio_raw_build(&b, SPA_PARAM_EnumFormat, &audio_info);
++        if (!params[0])
++            goto error_props;
++    } else if (af_fmt_is_spdif(ao->format)) {
+         enum spa_audio_iec958_codec spa_codec = af_fmt_to_codec(ao->format);
+         if (spa_codec == SPA_AUDIO_IEC958_CODEC_UNKNOWN) {
+             MP_ERR(ao, "Unhandled codec %d\n", ao->format);
+diff --git a/filters/f_decoder_wrapper.c b/filters/f_decoder_wrapper.c
+index 487d29ac65..4aa341e7d3 100644
+--- a/filters/f_decoder_wrapper.c
++++ b/filters/f_decoder_wrapper.c
+@@ -480,6 +480,20 @@ static bool reinit_decoder(struct priv *p)
+                 talloc_free(ol);
+             }
+         }
++
++        // `--ad=iamf-iec61937`: carry an IAMF track as bursts of a private
++        // IEC 61937 data type instead of decoding it, for an Omniphony
++        // renderer down a PCM link. Explicit only, like orender.
++        if (driver == &ad_lavc && p->codec->codec &&
++            strcmp(p->codec->codec, "iamf") == 0 &&
++            decoder_list_has(user_list, "iamf-iec61937"))
++        {
++            struct mp_decoder_list *il =
++                talloc_zero(NULL, struct mp_decoder_list);
++            ad_iamf_iec61937.add_decoders(il);
++            driver = &ad_iamf_iec61937;
++            list = il;
++        }
+ #endif
+     }
+ 
+diff --git a/filters/f_decoder_wrapper.h b/filters/f_decoder_wrapper.h
+index 53f336d85c..06c6b144be 100644
+--- a/filters/f_decoder_wrapper.h
++++ b/filters/f_decoder_wrapper.h
+@@ -108,6 +108,7 @@ extern const struct mp_decoder_fns ad_lavc;
+ extern const struct mp_decoder_fns ad_spdif;
+ #if HAVE_ORENDER
+ extern const struct mp_decoder_fns ad_orender;
++extern const struct mp_decoder_fns ad_iamf_iec61937;
+ #endif
+ 
+ // Convenience wrapper for lavc based decoders. Treat lavc_state as private;
+diff --git a/meson.build b/meson.build
+index d1524f25a8..a70b18fa07 100644
+--- a/meson.build
++++ b/meson.build
+@@ -677,7 +677,8 @@ endif
+ # common/orender_dl.c for the search order and the version handshake.
+ features += {'orender': get_option('orender').allowed()}
+ if features['orender']
+-    sources += files('audio/decode/ad_orender.c',
++    sources += files('audio/decode/ad_iamf_iec61937.c',
++                     'audio/decode/ad_orender.c',
+                      'common/orender_dl.c',
+                      'player/orender_overlay.c')
+ endif
+diff --git a/options/options.c b/options/options.c
+index 1c653a0114..c825743c02 100644
+--- a/options/options.c
++++ b/options/options.c
+@@ -74,6 +74,7 @@ extern const struct m_sub_options vd_lavc_conf;
+ extern const struct m_sub_options ad_lavc_conf;
+ #if HAVE_ORENDER
+ extern const struct m_sub_options ad_orender_conf;
++extern const struct m_sub_options ad_iamf_iec61937_conf;
+ #endif
+ extern const struct m_sub_options hwdec_conf;
+ extern const struct m_sub_options input_config;
+@@ -700,6 +701,7 @@ static const m_option_t mp_opts[] = {
+     {"ad-lavc", OPT_SUBSTRUCT(ad_lavc_params, ad_lavc_conf)},
+ #if HAVE_ORENDER
+     {"ad-orender", OPT_SUBSTRUCT(ad_orender_params, ad_orender_conf)},
++    {"ad-iamf-iec61937", OPT_SUBSTRUCT(ad_iamf_iec61937_params, ad_iamf_iec61937_conf)},
+ #endif
+ 
+     {"", OPT_SUBSTRUCT(hwdec_opts, hwdec_conf)},
+diff --git a/options/options.h b/options/options.h
+index 9ef62c611d..b0ab5d193a 100644
+--- a/options/options.h
++++ b/options/options.h
+@@ -383,6 +383,7 @@ typedef struct MPOpts {
+     // Always present (incomplete type when orender is disabled); only the
+     // ad-orender sub-option registration in options.c is HAVE_ORENDER-gated.
+     struct ad_orender_params *ad_orender_params;
++    struct ad_iamf_iec61937_params *ad_iamf_iec61937_params;
+ 
+     struct hwdec_opts *hwdec_opts;
+ 
