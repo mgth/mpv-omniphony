@@ -137,6 +137,41 @@ jobs:
           pkg-config --atleast-version=1.23 wayland-client
           pkg-config --atleast-version=1.44 wayland-protocols
 
+      # mpv master requires Vulkan headers >= 1.4.309 (mpv 598cb2e117); Noble
+      # ships 1.3.275. Only the headers are too old: the few entry points mpv
+      # takes from libvulkan.so.1 (surface creation, physical-device queries)
+      # are in Noble's loader, and libplacebo already builds against its own
+      # vendored headers. So put newer Khronos headers in the FEL prefix and
+      # describe them with a vulkan.pc whose Libs still name the distribution's
+      # loader: the binary keeps linking Noble's libvulkan1, and a symbol that
+      # loader lacks fails the link here instead of at start-up on the user's
+      # machine. For that reason, do NOT build a newer loader into the prefix.
+      # After the FEL deps on purpose: ffmpeg's configure auto-detects Vulkan
+      # (>= 1.3.277) and these headers would switch its Vulkan code on, which
+      # is a change of its own. Runs on cache hits too; it only copies headers.
+      - name: Install Vulkan headers >= 1.4.309 into the FEL prefix
+        run: |
+          PREFIX="$GITHUB_WORKSPACE/fel-prefix"
+          VK_HEADERS=1.4.363
+          curl -fsSL "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-${VK_HEADERS}.0.tar.gz" \
+            | tar xz
+          src="Vulkan-Headers-vulkan-sdk-${VK_HEADERS}.0"
+          grep -qx "#define VK_HEADER_VERSION ${VK_HEADERS##*.}" "$src/include/vulkan/vulkan_core.h"
+          rm -rf "$PREFIX/include/vulkan" "$PREFIX/include/vk_video"
+          mkdir -p "$PREFIX/include" "$PREFIX/lib/pkgconfig"
+          cp -r "$src/include/vulkan" "$src/include/vk_video" "$PREFIX/include/"
+          cat > "$PREFIX/lib/pkgconfig/vulkan.pc" <<EOF
+          prefix=$PREFIX
+          includedir=\${prefix}/include
+
+          Name: Vulkan-Headers
+          Description: Vulkan headers ${VK_HEADERS} over the distribution's Vulkan loader
+          Version: ${VK_HEADERS}
+          Libs: -lvulkan
+          Cflags: -I\${includedir}
+          EOF
+          PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" pkg-config --atleast-version=1.4.309 vulkan
+
       - name: Checkout Omniphony (renderer source)
         uses: actions/checkout@v5
         with:
@@ -225,6 +260,14 @@ jobs:
           ldd _b/mpv | grep -E 'libplacebo|libavcodec' || true
           ldd _b/mpv | grep -q "$PREFIX/lib/libplacebo" \
             || { echo "!! mpv did not link the FEL libplacebo in $PREFIX" >&2; exit 1; }
+          # Built with newer Vulkan headers, but the loader must stay the
+          # distribution's: the zip does not bundle one.
+          echo "== mpv Vulkan loader linkage =="
+          ldd _b/mpv | grep libvulkan
+          nm -D --undefined-only _b/mpv | awk '$2 ~ /^vk/ {print "  " $2}'
+          if ldd _b/mpv | grep libvulkan | grep -q "$GITHUB_WORKSPACE"; then
+            echo "!! mpv linked a Vulkan loader from the workspace, not the system one" >&2; exit 1
+          fi
 
       - name: Package (zip, bundling FEL libs)
         run: |
