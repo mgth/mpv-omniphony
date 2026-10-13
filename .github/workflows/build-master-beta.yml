@@ -115,27 +115,39 @@ jobs:
       # header is not generated and the build dies on implicit declarations.
       # Noble ships 1.22 / 1.34. Build both into the FEL prefix
       # (PKG_CONFIG_PATH/PATH already point there for the mpv build, and the
-      # bundler stages prefix libs). Runs on cache hits too — the pkg-config
-      # guard makes it a no-op once the prefix has them.
-      - name: Build wayland >= 1.23 into the FEL prefix
+      # Package step bundles the client libraries mpv links from there). Runs
+      # on cache hits too — the pkg-config guard makes it a no-op once the
+      # prefix has them.
+      #
+      # The newest Wayland release, not the oldest one mpv accepts. The
+      # bundled libwayland-client is the only one in the process: mpv loads it
+      # first, and the system's EGL and Vulkan drivers, which must share mpv's
+      # copy, then get it under the same soname. Those drivers import what
+      # their distribution's Wayland exports (Fedora 44's Mesa needs
+      # wl_display_dispatch_queue_timeout and wl_fixes_interface, which 1.23
+      # does not have), and Wayland only ever adds symbols, so the bundled
+      # copy must be at least as new as the system's. Bump WAYLAND when a
+      # release comes out.
+      - name: Build wayland into the FEL prefix
         run: |
+          WAYLAND=1.26.0
           export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/fel-prefix/lib/pkgconfig:$GITHUB_WORKSPACE/fel-prefix/share/pkgconfig:${PKG_CONFIG_PATH:-}"
-          if pkg-config --atleast-version=1.23 wayland-client && \
+          if pkg-config --atleast-version="$WAYLAND" wayland-client && \
              pkg-config --atleast-version=1.44 wayland-protocols; then
             echo "prefix already satisfies mpv's wayland requirements"; exit 0
           fi
-          curl -fsSLO https://gitlab.freedesktop.org/wayland/wayland/-/archive/1.23.1/wayland-1.23.1.tar.gz
-          tar xf wayland-1.23.1.tar.gz
-          meson setup wayland-1.23.1/_b wayland-1.23.1 \
+          curl -fsSLO "https://gitlab.freedesktop.org/wayland/wayland/-/archive/$WAYLAND/wayland-$WAYLAND.tar.gz"
+          tar xf "wayland-$WAYLAND.tar.gz"
+          meson setup "wayland-$WAYLAND/_b" "wayland-$WAYLAND" \
             --prefix="$GITHUB_WORKSPACE/fel-prefix" --libdir=lib --buildtype=release \
             -Ddocumentation=false -Dtests=false -Ddtd_validation=false
-          meson install -C wayland-1.23.1/_b
+          meson install -C "wayland-$WAYLAND/_b"
           curl -fsSLO https://gitlab.freedesktop.org/wayland/wayland-protocols/-/archive/1.49/wayland-protocols-1.49.tar.gz
           tar xf wayland-protocols-1.49.tar.gz
           meson setup wayland-protocols-1.49/_b wayland-protocols-1.49 \
             --prefix="$GITHUB_WORKSPACE/fel-prefix" -Dtests=false
           meson install -C wayland-protocols-1.49/_b
-          pkg-config --atleast-version=1.23 wayland-client
+          pkg-config --atleast-version="$WAYLAND" wayland-client
           pkg-config --atleast-version=1.44 wayland-protocols
 
       - name: Checkout Omniphony (renderer source)
