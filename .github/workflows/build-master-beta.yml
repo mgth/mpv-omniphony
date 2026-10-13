@@ -176,7 +176,10 @@ jobs:
           EOF
 
       - name: mpv source (mpv master + the fork's master tag)
-        run: echo "MPV_DIR=$(bash scripts/mpv-source.sh master)" >> "$GITHUB_ENV"
+        run: |
+          # On its own line: a failure must fail this step, not the next one.
+          src="$(bash scripts/mpv-source.sh master)"
+          echo "MPV_DIR=$src" >> "$GITHUB_ENV"
 
       # A tagged beta ships the engine of a release: the fork's vendored copy
       # of its header must be that header. Rolling builds follow Omniphony's
@@ -343,7 +346,10 @@ jobs:
           EOF
 
       - name: mpv source (mpv master + the fork's master tag)
-        run: echo "MPV_DIR=$(bash scripts/mpv-source.sh master)" >> "$GITHUB_ENV"
+        run: |
+          # On its own line: a failure must fail this step, not the next one.
+          src="$(bash scripts/mpv-source.sh master)"
+          echo "MPV_DIR=$src" >> "$GITHUB_ENV"
 
       - name: Build mpv (linked against FEL prefix)
         run: |
@@ -699,7 +705,10 @@ jobs:
           EOF
 
       - name: mpv source (mpv master + the fork's master tag)
-        run: echo "MPV_DIR=$(bash scripts/mpv-source.sh master)" >> "$GITHUB_ENV"
+        run: |
+          # On its own line: a failure must fail this step, not the next one.
+          src="$(bash scripts/mpv-source.sh master)"
+          echo "MPV_DIR=$src" >> "$GITHUB_ENV"
 
       # ao_asio needs the Steinberg ASIO SDK headers (GPLv3 half of its dual
       # licence). Exports ASIO_SDK_DIR, consumed by -Dasio-sdk below.

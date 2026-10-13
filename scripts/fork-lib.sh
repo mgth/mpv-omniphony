@@ -39,8 +39,16 @@ fetch_pinned() {
         ref="refs/tags/$tag"
     fi
     set_remote "$dir" fork "$MPV_FORK_URL"
-    git -C "$dir" fetch --quiet --no-tags "$@" fork "$ref"
-    got="$(git -C "$dir" rev-parse 'FETCH_HEAD^{commit}')"
+    # Called in a command substitution, where `set -e` is off: every failure
+    # is returned by hand.
+    git -C "$dir" fetch --quiet --no-tags "$@" fork "$ref" || {
+        echo "!! could not fetch $ref from $MPV_FORK_URL" >&2
+        exit 1
+    }
+    got="$(git -C "$dir" rev-parse --verify --quiet 'FETCH_HEAD^{commit}')" || {
+        echo "!! $ref of $MPV_FORK_URL is not a commit" >&2
+        exit 1
+    }
     if [ -z "${MPV_SOURCE_REF:-}" ] && [ "$got" != "$want" ]; then
         echo "!! $tag resolves to $got in $MPV_FORK_URL," >&2
         echo "   mpv-fork.env records $want. A fork tag is never moved:" >&2

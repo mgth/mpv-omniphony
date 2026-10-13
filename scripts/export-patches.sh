@@ -24,6 +24,9 @@ set -euo pipefail
 
 TRACK="${1:?usage: export-patches.sh stable | master [OUTDIR]}"
 OUT="${2:-$WORKDIR/patches-$TRACK}"
+# Absolute: the patches are written by a git that runs in the replay worktree.
+mkdir -p "$OUT/asio" "$OUT/orender"
+OUT="$(cd "$OUT" && pwd)"
 
 GIT_DIR_FORK="$WORKDIR/mpv-fork.git"
 [ -d "$GIT_DIR_FORK" ] || git init --quiet --bare "$GIT_DIR_FORK"
@@ -79,16 +82,21 @@ done
 # without a three-way merge.
 REPLAY="$WORKDIR/replay-$TRACK"
 if [ -d "$REPLAY" ]; then
-    g worktree remove --force "$REPLAY"
+    # Left by a run that failed; not a registered worktree any more when
+    # build/mpv-fork.git was deleted in between.
+    g worktree remove --force "$REPLAY" 2>/dev/null || rm -rf "${REPLAY:?}"
 fi
 g worktree prune
 g worktree add --quiet --detach "$REPLAY" "$base"
 pick() {
+    # A change that reached the branch twice, through two merged branches,
+    # replays as an empty commit: kept, so the series stays one patch a commit.
     GIT_COMMITTER_NAME=mpv-omniphony GIT_COMMITTER_EMAIL=mpv-omniphony@invalid \
-        git -C "$REPLAY" cherry-pick --allow-empty "$1" >/dev/null 2>&1 || {
+        git -C "$REPLAY" cherry-pick --allow-empty --keep-redundant-commits "$1" >/dev/null || {
         echo "!! $(g log -1 --format='%h %s' "$1")" >&2
-        echo "   does not replay with the ASIO commits moved first: it depends on" >&2
-        echo "   a commit of the other series. Untangle the two in the fork." >&2
+        echo "   does not replay with the ASIO commits moved first (git's reason is" >&2
+        echo "   above). If it depends on a commit of the other series, untangle" >&2
+        echo "   the two in the fork." >&2
         exit 1
     }
 }
@@ -102,13 +110,21 @@ if [ "$(git -C "$REPLAY" rev-parse 'HEAD^{tree}')" != "$(g rev-parse "$tip^{tree
     exit 1
 fi
 
-mkdir -p "$OUT/asio" "$OUT/orender"
 find "$OUT/asio" "$OUT/orender" -maxdepth 1 -name '*.patch' -delete
 git -C "$REPLAY" format-patch --quiet --zero-commit --no-signature \
     -o "$OUT/asio" "$base..$asio_tip"
 git -C "$REPLAY" format-patch --quiet --zero-commit --no-signature \
     -o "$OUT/orender" "$asio_tip..HEAD"
 g worktree remove --force "$REPLAY"
+
+# One file a commit, where the caller asked for them.
+written_asio="$(find "$OUT/asio" -maxdepth 1 -name '*.patch' | wc -l)"
+written_other="$(find "$OUT/orender" -maxdepth 1 -name '*.patch' | wc -l)"
+if [ "$written_asio" -ne "${#asio[@]}" ] || [ "$written_other" -ne "${#other[@]}" ]; then
+    echo "!! $written_asio + $written_other patches written to $OUT," >&2
+    echo "   ${#asio[@]} + ${#other[@]} commits replayed" >&2
+    exit 1
+fi
 
 echo ">> ${#asio[@]} ASIO and ${#other[@]} orender patches in $OUT," >&2
 echo "   to apply in that order on mpv $(g rev-parse --short=10 "$base")" >&2

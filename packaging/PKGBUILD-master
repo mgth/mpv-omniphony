@@ -22,17 +22,20 @@ depends=('orender>=0.4.1' 'ffmpeg' 'libass' 'libplacebo' 'lua' 'libx11' 'mesa')
 makedepends=('meson' 'ninja' 'python' 'git')
 provides=('mpv' 'mpv-omniphony' 'libmpv.so')
 conflicts=('mpv' 'mpv-omniphony')
-# MPV_FORK_URL, MPV_UPSTREAM_URL and MPV_FORK_MASTER_TAG.
+# MPV_FORK_URL, MPV_UPSTREAM_URL and MPV_FORK_MASTER_SHA, the commit of the
+# fork's pinned master tag.
 . "$(dirname "${BASH_SOURCE[0]}")/../mpv-fork.env"
 
 source=("mpv::git+$MPV_UPSTREAM_URL#branch=master"
-        "mpv-fork::git+$MPV_FORK_URL#tag=$MPV_FORK_MASTER_TAG")
+        "mpv-fork::git+$MPV_FORK_URL#commit=$MPV_FORK_MASTER_SHA")
 sha256sums=('SKIP'
             'SKIP')
 
+# Named after the upstream commit built on: makepkg runs this after prepare(),
+# where HEAD is the local merge and changes with every build.
 pkgver() {
     cd "$srcdir/mpv"
-    printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+    printf 'r%s.%s' "$(git rev-list --count origin/master)" "$(git rev-parse --short origin/master)"
 }
 
 prepare() {

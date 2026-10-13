@@ -40,7 +40,11 @@ jobs:
       # runtime against its vendored ABI header (common/orender_abi.h).
       - name: mpv source (mpv master HEAD + the fork's master tag)
         id: snap
-        run: echo "src=$(bash scripts/mpv-source.sh master)" >> "$GITHUB_OUTPUT"
+        run: |
+          # On its own line: a failure (mpv master has moved under the fork's
+          # commits) must fail this step, not the next one.
+          src="$(bash scripts/mpv-source.sh master)"
+          echo "src=$src" >> "$GITHUB_OUTPUT"
 
       # mpv master requires libplacebo >= 7.x while ubuntu-latest apt ships 6.x.
       # Upstream's documented answer is the meson subproject fallback (mpv's
