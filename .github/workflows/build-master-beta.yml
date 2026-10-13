@@ -29,6 +29,7 @@ on:
       - 'mpv-fork.env'
       - 'deps-fel/**'
       - 'scripts/build-fel-deps.sh'
+      - 'scripts/check-linux-bundle.sh'
       - 'scripts/mpv-source.sh'
       - 'scripts/fork-lib.sh'
       - '.github/workflows/build-master-beta.yml'
@@ -234,13 +235,42 @@ jobs:
           cp sysroot/usr/lib/liborender.so.0 staging/lib/
           cp sysroot/usr/include/orender.h staging/
           cp README.md staging/
-          # Bundle the FEL libplacebo/ffmpeg/libdovi next to the binary and make
-          # mpv find them via rpath, so the zip actually renders FEL (otherwise it
-          # silently falls back to base layer against system libs).
-          cp -P "$PREFIX"/lib/lib{placebo,dovi,av*,sw*}*.so* staging/lib/ 2>/dev/null || true
+          # Bundle every library mpv loads from the FEL prefix, whether mpv
+          # needs it itself or through another library: the FEL
+          # libplacebo/ffmpeg/libdovi (otherwise the zip silently falls back to
+          # base layer against system libs) and the Wayland client libraries
+          # built above, which Noble's cannot stand in for. `ldd` lists the
+          # whole closure, so there is no list of names to keep here. Each
+          # library is copied once, under its soname, the only name the loader
+          # asks for.
+          ldd_out=$(LD_LIBRARY_PATH="$PREFIX/lib" ldd staging/mpv)
+          awk -v p="$PREFIX/lib/" 'index($3, p) == 1 {print $3}' <<<"$ldd_out" > prefix-libs.txt
+          grep -q '/libdovi\.so' prefix-libs.txt \
+            || { echo "!! mpv does not load libdovi from $PREFIX: no FEL in this build" >&2; exit 1; }
+          # A RUNPATH on every object, not on mpv alone: the loader applies an
+          # object's RUNPATH to that object's own dependencies only, so mpv's
+          # does not reach libdovi, which libplacebo needs and mpv does not.
+          # Not DT_RPATH (--force-rpath) on mpv either: it would cover the
+          # bundled libraries, but also every library the system's own ones
+          # load into the process (GPU drivers, audio plugins), and it takes
+          # precedence over LD_LIBRARY_PATH.
+          while read -r lib; do
+            cp -L "$lib" staging/lib/
+            patchelf --set-rpath '$ORIGIN' "staging/lib/$(basename "$lib")"
+          done < prefix-libs.txt
           patchelf --set-rpath '$ORIGIN/lib' staging/mpv
+          ls -l staging/lib
           cd staging
           zip -r "../mpv-omniphony-fel-linux-x86_64.zip" .
+
+      # This runner is the distribution the zip is for (Ubuntu 24.04). Unpack
+      # the zip away from the build tree and start it with an empty
+      # environment: a library that only the FEL prefix or a build step's
+      # LD_LIBRARY_PATH provided fails here, not on the user's machine.
+      - name: Check the zip starts on this runner
+        run: |
+          unzip -q mpv-omniphony-fel-linux-x86_64.zip -d "$RUNNER_TEMP/zip-check"
+          bash scripts/check-linux-bundle.sh "$RUNNER_TEMP/zip-check"
 
       - uses: actions/upload-artifact@v6
         with:
