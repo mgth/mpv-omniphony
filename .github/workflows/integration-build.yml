@@ -76,8 +76,16 @@ jobs:
           cp "$rel/liborender.so" "staging/${soname:?no SONAME in liborender.so}"
           cp omniphony/omniphony-renderer/orender_ffi/include/orender.h staging/
 
-      - name: Apply patches onto mpv
-        run: bash scripts/apply-patches.sh "$MPV_TAG"
+      - name: mpv source (the fork's stable tag)
+        run: bash scripts/mpv-source.sh stable
+
+      # This build follows Omniphony's main, where the engine header moves
+      # before the fork's vendored copy does: a difference is reported here,
+      # and refused by release.yml.
+      - name: Check the vendored liborender header
+        run: |
+          bash scripts/check-abi-header.sh "build/mpv-${MPV_TAG}/common/orender_abi.h" \
+            omniphony/omniphony-renderer/orender_ffi/include/orender.h --warn
 
       - name: Build mpv with ad_orender
         run: |
@@ -266,8 +274,8 @@ jobs:
       # liborender is a pure runtime dependency now (mpv dlopens it against its
       # vendored ABI header) — nothing to install into the MinGW sysroot; the
       # downloaded orender.dll goes straight into the zip next to mpv.exe.
-      - name: Apply patches onto mpv
-        run: bash scripts/apply-patches.sh "$MPV_TAG"
+      - name: mpv source (the fork's stable tag)
+        run: bash scripts/mpv-source.sh stable
 
       - name: Write meson cross-file (x86_64-w64-mingw32)
         run: |
@@ -427,8 +435,8 @@ jobs:
           cp omniphony/omniphony-renderer/target/release/liborender.dylib \
              sysroot/usr/lib/liborender.dylib
 
-      - name: Apply patches onto mpv
-        run: bash scripts/apply-patches.sh "$MPV_TAG"
+      - name: mpv source (the fork's stable tag)
+        run: bash scripts/mpv-source.sh stable
 
       - name: Build mpv with ad_orender
         run: |

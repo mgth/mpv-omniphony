@@ -242,6 +242,6 @@ cat <<EOF
 Link your mpv build against it:
   export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:\$PKG_CONFIG_PATH"
   export PATH="$PREFIX/bin:\$PATH"
-Then apply the orender patches onto mpv master (FEL is native there now):
-  scripts/apply-patches-master.sh
+Then assemble mpv master with the fork's master tag (FEL is native there now):
+  scripts/mpv-source.sh master
 EOF

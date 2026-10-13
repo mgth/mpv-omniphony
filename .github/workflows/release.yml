@@ -1,7 +1,7 @@
 name: Release
 
 # Triggered by a v* tag.
-# Builds mpv (with our ad_orender patches) for Linux, Windows (MinGW cross) and
+# Builds mpv (the fork tag pinned in mpv-fork.env) for Linux, Windows (MinGW cross) and
 # macOS arm64 (native), bundles each with the matching liborender artifacts, and
 # creates a draft GitHub release.
 #
@@ -119,8 +119,22 @@ jobs:
             https://github.com/FFmpeg/nv-codec-headers nv-codec-headers
           make -C nv-codec-headers install PREFIX="${{ github.workspace }}/sysroot/usr"
 
-      - name: Apply patches onto mpv
-        run: bash scripts/apply-patches.sh "$MPV_TAG"
+      - name: mpv source (the fork's stable tag)
+        run: bash scripts/mpv-source.sh stable
+
+      # mpv compiles against its vendored copy of the engine header, and the
+      # engine built above is the one that ships: they must be the same header.
+      - name: Check the vendored liborender header
+        run: |
+          bash scripts/check-abi-header.sh "build/mpv-${MPV_TAG}/common/orender_abi.h" \
+            omniphony/omniphony-renderer/orender_ffi/include/orender.h
+
+      # The fork's delta as patches on mpv ${MPV_TAG}, for packagers and for
+      # the corresponding-source statement of the release notes.
+      - name: Export the patch series (release asset)
+        run: |
+          bash scripts/export-patches.sh stable patches-out
+          tar -czf "mpv-omniphony-${VERSION//\//-}-patches.tar.gz" -C patches-out asio orender
 
       - name: Build mpv with ad_orender
         run: |
@@ -173,6 +187,7 @@ jobs:
           path: |
             mpv-omniphony-*-linux-x86_64.zip
             mpv-omniphony-*-linux-x86_64.AppImage
+            mpv-omniphony-*-patches.tar.gz
 
   # Build orender.dll from the same Omniphony ref, natively on Windows (MSVC,
   # C ABI) exactly like Omniphony's own liborender-release workflow. The mpv
@@ -374,8 +389,8 @@ jobs:
       # vendored ABI header) — nothing to install into the MinGW sysroot; the
       # downloaded orender.dll goes straight into the zip next to mpv.exe,
       # where the runtime loader's exe-dir candidate finds it.
-      - name: Apply patches onto mpv
-        run: bash scripts/apply-patches.sh "$MPV_TAG"
+      - name: mpv source (the fork's stable tag)
+        run: bash scripts/mpv-source.sh stable
 
       - name: Write meson cross-file (x86_64-w64-mingw32)
         run: |
@@ -614,8 +629,8 @@ jobs:
           cp omniphony/omniphony-renderer/target/release/liborender.dylib \
              sysroot/usr/lib/liborender.dylib
 
-      - name: Apply patches onto mpv
-        run: bash scripts/apply-patches.sh "$MPV_TAG"
+      - name: mpv source (the fork's stable tag)
+        run: bash scripts/mpv-source.sh stable
 
       - name: Build mpv with ad_orender
         run: |
@@ -711,6 +726,18 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: mpv-fork.env
+          sparse-checkout-cone-mode: false
+
+      - name: Read the fork tag this build was made from
+        id: fork
+        run: |
+          . ./mpv-fork.env
+          echo "tag=$MPV_FORK_STABLE_TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$MPV_FORK_STABLE_SHA" >> "$GITHUB_OUTPUT"
+
       - uses: actions/download-artifact@v7
         with:
           name: mpv-omniphony-linux-x86_64
@@ -811,10 +838,14 @@ jobs:
 
             **License — GPL-3.0-or-later.** This build combines mpv
             (GPL-2.0-or-later) with liborender (GPL-3.0-or-later), so the
-            combined work is GPLv3. Corresponding source: mpv
-            `${{ env.MPV_TAG }}` + this repo's `patches/` at commit
-            ${{ github.sha }}, and liborender at Omniphony
-            `${{ env.OMNIPHONY_REF }}` (https://github.com/mgth/Omniphony).
+            combined work is GPLv3. Corresponding source: the mpv fork at
+            tag `${{ steps.fork.outputs.tag }}` (https://github.com/mgth/mpv,
+            commit ${{ steps.fork.outputs.sha }}), which is mpv
+            `${{ env.MPV_TAG }}` plus the patch series attached as
+            `…-patches.tar.gz`; the build recipe at commit ${{ github.sha }}
+            of https://github.com/mgth/mpv-omniphony; and liborender at
+            Omniphony `${{ env.OMNIPHONY_REF }}`
+            (https://github.com/mgth/Omniphony).
             Bundled third-party libraries: see `THIRD-PARTY-NOTICES.md`.
           files: |
             mpv-omniphony-*-linux-x86_64.zip
@@ -822,3 +853,4 @@ jobs:
             mpv-omniphony-*-windows-x86_64.zip
             libmpv-omniphony-*-windows-x86_64.zip
             mpv-omniphony-*-macos-arm64.zip
+            mpv-omniphony-*-patches.tar.gz

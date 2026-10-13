@@ -5,8 +5,10 @@
 # distribution. Coexists conflict-wise with `mpv-omniphony` (the pinned
 # v0.41.0 build) — install one or the other.
 #
-# Requires ../patches-master/ to be populated by
-# scripts/regenerate-patches-master.sh from the fork's `orender-master` branch.
+# Built from a checkout of this repository: the tag of the fork's
+# `orender-master` branch pinned in ../mpv-fork.env is merged into mpv master
+# HEAD, as scripts/mpv-source.sh master does. A merge conflict means mpv
+# master has moved under the fork's commits (README, "Tracking mpv master").
 
 pkgname=mpv-omniphony-git
 _mpvver=master
@@ -20,28 +22,27 @@ depends=('orender>=0.4.1' 'ffmpeg' 'libass' 'libplacebo' 'lua' 'libx11' 'mesa')
 makedepends=('meson' 'ninja' 'python' 'git')
 provides=('mpv' 'mpv-omniphony' 'libmpv.so')
 conflicts=('mpv' 'mpv-omniphony')
-source=("mpv::git+https://github.com/mpv-player/mpv.git#branch=master")
-sha256sums=('SKIP')
+# MPV_FORK_URL, MPV_UPSTREAM_URL and MPV_FORK_MASTER_SHA, the commit of the
+# fork's pinned master tag.
+. "$(dirname "${BASH_SOURCE[0]}")/../mpv-fork.env"
 
-_repo="$startdir/.."     # mpv-omniphony repo root (src/, patches-master/)
+source=("mpv::git+$MPV_UPSTREAM_URL#branch=master"
+        "mpv-fork::git+$MPV_FORK_URL#commit=$MPV_FORK_MASTER_SHA")
+sha256sums=('SKIP'
+            'SKIP')
 
+# Named after the upstream commit built on: makepkg runs this after prepare(),
+# where HEAD is the local merge and changes with every build.
 pkgver() {
     cd "$srcdir/mpv"
-    printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+    printf 'r%s.%s' "$(git rev-list --count origin/master)" "$(git rev-parse --short origin/master)"
 }
 
 prepare() {
     cd "$srcdir/mpv"
-    shopt -s nullglob
-    local patches=("$_repo"/patches-master/*.patch)
-    if [ ${#patches[@]} -eq 0 ]; then
-        echo "no patches in ../patches-master — generate them first" >&2
-        return 1
-    fi
-    for p in "${patches[@]}"; do
-        echo "applying ${p##*/}"
-        patch -p1 < "$p"
-    done
+    git fetch --quiet --no-tags "$srcdir/mpv-fork" HEAD
+    git -c user.name=makepkg -c user.email=makepkg@localhost \
+        merge --quiet --no-edit FETCH_HEAD
 }
 
 build() {
