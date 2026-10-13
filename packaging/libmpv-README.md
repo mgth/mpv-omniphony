@@ -60,7 +60,7 @@ compiled with `-Dgpl=true` and combined with `liborender`
 into — is **GPL-3.0-or-later**. If you need LGPL terms, use an upstream libmpv
 build; it has no spatial decoder.
 
-Corresponding source: mpv at the tag recorded in the release notes plus this
-repo's `patches/`, and `liborender` from
+Corresponding source: the mpv fork (https://github.com/mgth/mpv) at the tag
+recorded in the release notes, and `liborender` from
 [Omniphony](https://github.com/mgth/Omniphony). Bundled third-party libraries:
 see `THIRD-PARTY-NOTICES.md` in the mpv-omniphony repository.

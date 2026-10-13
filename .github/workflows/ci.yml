@@ -10,7 +10,7 @@ jobs:
   build-mpv:
     runs-on: ubuntu-latest
     env:
-      MPV_TAG: v0.41.0     # keep in sync with scripts/ and PKGBUILD
+      MPV_TAG: v0.41.0     # the stable track's upstream base, as in mpv-fork.env
     steps:
       - uses: actions/checkout@v5
 
@@ -24,8 +24,8 @@ jobs:
 
       # No liborender needed at build time: the patched mpv dlopens it at
       # runtime against its vendored ABI header (common/orender_abi.h).
-      - name: Apply patches onto pinned mpv
-        run: bash scripts/apply-patches.sh "$MPV_TAG"
+      - name: mpv source (the fork's stable tag)
+        run: bash scripts/mpv-source.sh stable
 
       - name: Configure & build
         run: |
@@ -65,3 +65,58 @@ jobs:
           cp /tmp/stub-bad/liborender.so _b/liborender.so.0
           mpv_grep | grep -q "orender: rejecting.*next to mpv.*ABI major 99"
           rm _b/liborender.so.0
+
+  # What ties this repository to the fork and to the engine, checked on both
+  # tracks without building mpv.
+  fork-glue:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The engine release the stable builds pin (release.yml), which a tagged
+      # beta must pin too. Between an Omniphony version bump and its tag, the
+      # pinned tag does not exist yet: main is what it will be cut from.
+      - name: Resolve the pinned Omniphony ref
+        id: omni
+        run: |
+          ref="$(sed -n 's/^  OMNIPHONY_REF: *//p' .github/workflows/release.yml)"
+          [ -n "$ref" ] || { echo "!! no OMNIPHONY_REF in release.yml" >&2; exit 1; }
+          grep -q "OMNIPHONY_REF: .*&& '$ref' ||" .github/workflows/build-master-beta.yml || {
+            echo "!! build-master-beta.yml does not pin Omniphony $ref for a tagged beta, release.yml does" >&2
+            exit 1
+          }
+          if ! git ls-remote --exit-code https://github.com/mgth/Omniphony.git "refs/tags/$ref" >/dev/null; then
+            echo "::warning::Omniphony $ref is not tagged yet: the header is checked against main"
+            ref=main
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v5
+        with:
+          repository: mgth/Omniphony
+          ref: ${{ steps.omni.outputs.ref }}
+          path: omniphony
+          sparse-checkout: omniphony-renderer/orender_ffi/include
+
+      # Each track's series replays on its upstream base to the tree of the
+      # pinned fork tag, with the ASIO output as a series of its own.
+      - name: Export the patch series of both tracks
+        run: |
+          bash scripts/export-patches.sh stable patches-out/stable
+          bash scripts/export-patches.sh master patches-out/master
+
+      # mpv compiles against the fork's vendored copy of the engine header
+      # and loads the engine at runtime: a copy that has drifted fails here.
+      - name: Check the vendored liborender header of both tracks
+        run: |
+          . ./mpv-fork.env
+          for sha in "$MPV_FORK_STABLE_SHA" "$MPV_FORK_MASTER_SHA"; do
+            git -C build/mpv-fork.git show "$sha:common/orender_abi.h" > orender_abi.h
+            bash scripts/check-abi-header.sh orender_abi.h \
+              omniphony/omniphony-renderer/orender_ffi/include/orender.h
+          done
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: patch-series
+          path: patches-out

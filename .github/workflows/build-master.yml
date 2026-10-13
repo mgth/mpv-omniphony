@@ -1,20 +1,22 @@
 name: build-master
 
-# Track upstream mpv master HEAD (no tag pin). Daily smoke test catches drift
-# between mpv's evolving master and patches-master/ early — when this fails,
-# rebase orender-master in the fork and run regenerate-patches-master.sh.
+# Track upstream mpv master HEAD (no pin on the upstream side). The daily smoke
+# test merges the fork's master tag into mpv's moving master and builds the
+# result: when it fails, rebase orender-master in the fork, tag it and update
+# mpv-fork.env (README, "Tracking mpv master").
 
 on:
   push:
     paths:
-      - 'patches-master/**'
-      - 'scripts/apply-patches-master.sh'
-      - 'scripts/regenerate-patches-master.sh'
+      - 'mpv-fork.env'
+      - 'scripts/mpv-source.sh'
+      - 'scripts/fork-lib.sh'
       - '.github/workflows/build-master.yml'
   pull_request:
     paths:
-      - 'patches-master/**'
-      - 'scripts/apply-patches-master.sh'
+      - 'mpv-fork.env'
+      - 'scripts/mpv-source.sh'
+      - 'scripts/fork-lib.sh'
       - '.github/workflows/build-master.yml'
   schedule:
     - cron: '0 6 * * *'   # daily: master moves fast, weekly is too slow
@@ -36,15 +38,9 @@ jobs:
 
       # No liborender needed at build time: the patched mpv dlopens it at
       # runtime against its vendored ABI header (common/orender_abi.h).
-      - name: Apply patches onto mpv master HEAD
-        run: bash scripts/apply-patches-master.sh
-
-      - name: Locate snapshot dir
+      - name: mpv source (mpv master HEAD + the fork's master tag)
         id: snap
-        run: |
-          src="$(ls -d build/mpv-master-* | grep -v '^build/mpv-master-clone$' | head -n1)"
-          echo "src=$src" >> "$GITHUB_OUTPUT"
-          echo ">> built against $src"
+        run: echo "src=$(bash scripts/mpv-source.sh master)" >> "$GITHUB_OUTPUT"
 
       # mpv master requires libplacebo >= 7.x while ubuntu-latest apt ships 6.x.
       # Upstream's documented answer is the meson subproject fallback (mpv's

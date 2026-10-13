@@ -1,4 +1,4 @@
-# patched mpv checkouts / build trees (scripts/apply-patches.sh)
+# mpv checkouts / build trees (scripts/mpv-source.sh, scripts/export-patches.sh)
 /build/
 # from-source master-track dependency stack and local build outputs
 /fel-prefix/

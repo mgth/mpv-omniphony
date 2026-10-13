@@ -2,8 +2,8 @@
 
 mpv with a **spatial audio decoder** that renders objects through
 [`liborender`](https://github.com/mgth/Omniphony) (VBAP spatial rendering)
-instead of letting FFmpeg downmix. **This repository holds the mpv-side
-integration and build only.**
+instead of letting FFmpeg downmix. **This repository holds the build, the
+packaging and the releases of the player only.**
 
 [![Download Omniphony Studio](https://img.shields.io/badge/Download-Omniphony-2ea44f?style=for-the-badge&logo=github)](https://github.com/mgth/Omniphony/releases/latest)
 [![Download mpv-omniphony](https://img.shields.io/badge/Download-mpv--omniphony-1f6feb?style=for-the-badge&logo=github)](https://github.com/mgth/Omniphony/releases/tag/mpv-v0.4.2)
@@ -21,10 +21,12 @@ integration and build only.**
 >
 > [![Star Omniphony](https://img.shields.io/github/stars/mgth/Omniphony?style=social&label=Star%20the%20engine)](https://github.com/mgth/Omniphony)
 
-This repo holds **only** the mpv-side integration: the decoder source
-(`src/ad_orender.c`), the patches that wire it into the mpv build, packaging and
-CI. The renderer itself (`liborender.so` + the decoder bridge) is built and
-packaged from the `Omniphony` repo (`packaging/arch/`).
+This repo holds **only** the build recipe, the packaging and the CI. The
+mpv-side code (the `ad_orender` decoder and what wires it into mpv) lives in
+one place, the fork [`mgth/mpv`](https://github.com/mgth/mpv): every build
+here compiles a tag of that fork, named in [`mpv-fork.env`](mpv-fork.env). The
+renderer itself (`liborender.so` + the decoder bridge) is built and packaged
+from the `Omniphony` repo (`packaging/arch/`).
 
 mpv loads liborender at **runtime** (dlopen + ABI version handshake) — building
 mpv needs no engine at all, and an updated engine (e.g. deployed by Omniphony
@@ -46,35 +48,72 @@ Studio) is picked up without rebuilding mpv. The library search order and the
 ## Layout
 
 ```
-src/ad_orender.c        # readable copy of the decoder (patch 0001 adds it to mpv)
-patches/                # generated diffs vs. pinned mpv v0.41.0
-patches-master/         # generated diffs vs. upstream mpv master HEAD (live tracker)
-scripts/apply-patches.sh             # clone pinned mpv + apply patches/
-scripts/apply-patches-master.sh      # clone mpv master HEAD + apply patches-master/
-scripts/regenerate-patches.sh        # rebuild patches/ from the fork's `orender`
-scripts/regenerate-patches-master.sh # rebuild patches-master/ from `orender-master`
-scripts/build-appimage.sh            # package a built mpv + liborender as a Linux AppImage
-scripts/smoke-test-appimage.sh       # run that AppImage in a Fedora container (CI gate)
+mpv-fork.env            # the fork tags the builds compile (stable and master track)
+scripts/mpv-source.sh        # fetch the pinned fork tag into build/ (both tracks)
+scripts/export-patches.sh    # the fork's delta as patch series (ASIO, then orender)
+scripts/check-abi-header.sh  # the fork's vendored engine header vs. Omniphony's
+scripts/build-appimage.sh    # package a built mpv + liborender as a Linux AppImage
+scripts/smoke-test-appimage.sh  # run that AppImage in a Fedora container (CI gate)
 meson-options.txt       # canonical `orender` meson feature option
-packaging/PKGBUILD          # Arch package against v0.41.0 (provides/conflicts mpv)
-packaging/PKGBUILD-master   # Arch -git package tracking master HEAD
+packaging/PKGBUILD          # Arch package of the stable track (provides/conflicts mpv)
+packaging/PKGBUILD-master   # Arch -git package tracking mpv master HEAD
 packaging/libmpv-README.md  # shipped inside the Windows libmpv SDK zip
-.github/workflows/ci.yml             # weekly drift check on v0.41.0
-.github/workflows/build-master.yml   # daily smoke test on master HEAD
+.github/workflows/ci.yml             # stable build, loader tests, fork checks
+.github/workflows/build-master.yml   # daily smoke test on mpv master HEAD
 ```
+
+## Where the mpv code lives
+
+In the fork, and nowhere else. This repository carries no copy of the decoder
+and no committed patches.
+
+| Track | Fork branch | Based on | Pinned in `mpv-fork.env` as |
+|---|---|---|---|
+| stable | `orender` | the upstream release `MPV_TAG` (`v0.41.0`) | `MPV_FORK_STABLE_TAG` + its commit |
+| master | `orender-master` | the upstream master commit `MPV_MASTER_BASE` | `MPV_FORK_MASTER_TAG` + its commit |
+
+- The decoder is
+  [`audio/decode/ad_orender.c`](https://github.com/mgth/mpv/blob/orender/audio/decode/ad_orender.c)
+  in the fork.
+- The engine header mpv compiles against is the fork's
+  `common/orender_abi.h`: a verbatim copy of Omniphony's
+  `orender_ffi/include/orender.h` below a leading comment. CI diffs it against
+  the header of the Omniphony release the builds pin (`OMNIPHONY_REF` in
+  `release.yml`), on both tracks, and the release build diffs it against the
+  engine it bundles: a copy that has drifted fails a build, not a playback.
+- A fork tag is never moved, and the scripts refuse a tag that does not
+  resolve to the commit recorded next to it.
+
+### Patch series
+
+For a distribution package or a review, `scripts/export-patches.sh stable`
+(or `master`) writes the fork's delta as two series, to apply in this order on
+the track's upstream base:
+
+- `asio/`: the ASIO audio output (`ao_asio`), which is not part of the orender
+  integration;
+- `orender/`: the integration itself.
+
+The fork's branches interleave the two. The script replays the ASIO commits
+first and the others after, and fails unless that gives the tree of the pinned
+tag, or when a commit touches both. CI runs it on every push, and each
+release attaches the series as `…-patches.tar.gz`.
 
 ## Build (dev)
 
 ```sh
-# 1. assemble a patched mpv tree at build/mpv-v0.41.0 (clones the pinned tag):
-scripts/apply-patches.sh v0.41.0
+# 1. fetch the pinned fork tag into build/mpv-v0.41.0:
+scripts/mpv-source.sh stable
 
 # 2. build it (no liborender needed at build time — it is dlopen'd at runtime):
 cd build/mpv-v0.41.0
 meson setup _b -Dorender=enabled && meson compile -C _b
+```
 
-# (to refresh patches/ after editing the fork's `orender` branch:)
-scripts/regenerate-patches.sh /path/to/mpv-fork v0.41.0
+To build fork work that is not tagged yet, point the script at a checkout:
+
+```sh
+MPV_FORK_URL=/path/to/mpv-fork MPV_SOURCE_REF=orender scripts/mpv-source.sh stable
 ```
 
 Running it (playback, the shared `~/.config/omniphony/config.yaml`, OSC, Studio
@@ -91,58 +130,59 @@ headers and the runtime DLLs. Details in
 **GPL-3.0-or-later** libmpv (mpv `-Dgpl=true` combined with liborender), not
 the LGPL build upstream publishes.
 
-## mpv fork workflow
+## Shipping a change of the fork
 
-Develop the integration in a fork of `mpv-player/mpv`:
+1. Merge it in the fork, on **both** branches: `orender` and
+   `orender-master` carry the same commits on different bases. Keep ASIO
+   changes in commits of their own.
+2. Tag the two new heads. The first tags of a player version are
+   `orender-v<version>` and `orender-master-v<version>`; later ones add `.1`,
+   `.2`, …:
 
-- `master` mirrors upstream (never modified).
-- `orender` carries the integration commits based on the pinned `v0.41.0` tag.
-- `orender-master` carries the same commits rebased onto `upstream/master` (feeds
-  `patches-master/`; rebase periodically when the daily CI flags drift).
+   ```sh
+   git tag -a orender-v0.7.0.1 origin/orender -m "orender-v0.7.0.1"
+   git tag -a orender-master-v0.7.0.1 origin/orender-master -m "orender-master-v0.7.0.1"
+   git push origin orender-v0.7.0.1 orender-master-v0.7.0.1
+   ```
+3. Here, update the tags and their commits in `mpv-fork.env`, in a pull
+   request. Its CI builds the stable tag, replays both patch series and checks
+   the vendored engine header.
 
-```sh
-git remote add upstream https://github.com/mpv-player/mpv.git
-git fetch upstream
-git checkout master && git merge upstream/master
-git checkout orender
-# Integrate the decoder changes here, but keep this branch based on v0.41.0.
-scripts/regenerate-patches.sh /path/to/mpv-fork v0.41.0
-```
-
-Do not rebase `orender` onto `master`: the stable patch series is intentionally
-generated from the pinned `v0.41.0` base. Only `orender-master`, described
-below, follows current upstream `master`.
+Do not rebase `orender` onto `master`: the stable track stays on the pinned
+upstream release. Only `orender-master`, below, follows upstream `master`.
 
 ## Tracking mpv master
 
-A second build path targets **upstream mpv master HEAD** (no SHA pin, live
-tracker). Useful for catching breakage early and for power users who want the
-freshest mpv with the orender decoder. The pinned `v0.41.0` flow above is the
-stable default — the master flow may break on any upstream merge.
+A second build path targets **upstream mpv master HEAD**: the fork's master
+tag is merged into whatever mpv master is that day. Useful for catching
+breakage early and for power users who want the freshest mpv with the orender
+decoder. The stable flow above is the default — the master flow may break on
+any upstream merge.
 
 ```sh
-# Local build (clones mpv master + applies patches-master/):
-scripts/apply-patches-master.sh
-cd build/mpv-master-<short-sha>
+scripts/mpv-source.sh master            # -> build/mpv-master-<upstream sha>
+cd build/mpv-master-<upstream sha>
 meson setup _b -Dorender=enabled && meson compile -C _b
+
+scripts/mpv-source.sh master --pinned   # the fork tag as it is, reproducible
 ```
 
-When the daily CI (`build-master.yml`) goes red, it means an upstream merge
-collided with one of the 7 integration commits. Rebase `orender-master`:
+When the daily CI (`build-master.yml`) goes red, an upstream merge collided
+with the fork's commits. Rebase `orender-master`, then ship it as above with
+the new base:
 
 ```sh
 cd /path/to/mpv-fork
 git checkout orender-master
 git fetch upstream
 git rebase upstream/master                      # resolve conflicts
-cd /path/to/mpv-omniphony
-scripts/regenerate-patches-master.sh /path/to/mpv-fork
-git add patches-master/ && git commit -m "patches-master: rebase onto upstream/master"
+git merge-base orender-master upstream/master   # the new MPV_MASTER_BASE
 ```
 
 Packaging: `packaging/PKGBUILD-master` builds an `mpv-omniphony-git` package
-that clones mpv master at install time and applies `patches-master/`. It
-conflicts with both stock `mpv` and the stable `mpv-omniphony` — install one.
+that clones mpv master at install time and merges the fork's master tag into
+it. It conflicts with both stock `mpv` and the stable `mpv-omniphony` —
+install one.
 
 ## Dolby Vision FEL (experimental)
 
@@ -155,7 +195,7 @@ distro/package ships the FEL API yet:
 
 | Component | Role | Source |
 |---|---|---|
-| mpv master | demux P7, split BL/EL, pair, hand EL to libplacebo | native (mpv PR #17932, merged); applied via `patches-master/` (orender only) |
+| mpv master | demux P7, split BL/EL, pair, hand EL to libplacebo | native (mpv PR #17932, merged); the fork's master tag adds orender only |
 | libplacebo master | reconstructs the FEL (needs `PL_API_VER >= 370`) | built by `build-fel-deps.sh` (upstream MR !851, merged to master) |
 | ffmpeg master | `dovi_split` BSF + DoVi stream group → BL/EL packets | built by `build-fel-deps.sh` (upstream) |
 | libdovi | RPU parsing for the EL | built by `build-fel-deps.sh` (quietvoid/dovi_tool) |
@@ -172,7 +212,7 @@ libplacebo. So this build links a dedicated prefix **first** on
 `PKG_CONFIG_PATH`, shadowing the system/Martchus libs — until distros ship a
 new-enough libplacebo/ffmpeg (see the exit plan below).
 
-This pairs with the **master-tracking** flow (mpv master + `patches-master/`);
+This pairs with the **master-tracking** flow (mpv master + the fork's master tag);
 the pinned `v0.41.0` tree does not have the feature (it will inherit it once mpv
 0.42.0 is released and the stable track rebases onto it).
 
@@ -185,8 +225,8 @@ PREFIX="$PWD/fel-prefix" scripts/build-fel-deps.sh        # native (Linux)
 #    (cross/MinGW: PREFIX=/usr/x86_64-w64-mingw32 CROSS_FILE=cross.ini \
 #                  scripts/build-fel-deps.sh --cross)
 
-# 2. assemble the mpv tree (mpv master + orender patches; FEL is native)
-scripts/apply-patches-master.sh                          # -> build/mpv-master-<sha>
+# 2. assemble the mpv tree (mpv master + the fork's master tag; FEL is native)
+scripts/mpv-source.sh master                             # -> build/mpv-master-<sha>
 
 # 3. build mpv linked against the prefix (prefix FIRST so it wins)
 export PKG_CONFIG_PATH="$PWD/fel-prefix/lib/pkgconfig:$PKG_CONFIG_PATH"
@@ -232,16 +272,16 @@ plain mpv master build. (mpv 0.42.0 additionally brings it to the stable track.)
 
 ## License
 
-`mpv-omniphony` is a patch-set fork of
+`mpv-omniphony` is built from a fork of
 [mpv](https://github.com/mpv-player/mpv) (**GPL-2.0-or-later**, © the mpv
 authors) that adds the `ad_orender` audio decoder. `ad_orender` loads
 **`liborender`** from [Omniphony](https://github.com/mgth/Omniphony) at
 runtime, which is **GPL-3.0-or-later**.
 
-- Our first-party additions — `src/ad_orender.c`, the integration commits in
-  `patches/` / `patches-master/`, and the build tooling — are
-  **GPL-2.0-or-later**. The bundled Steinberg ASIO output driver (`ao_asio.c`,
-  added by `patches/`) keeps its **LGPL-2.1-or-later** header.
+- Our first-party additions — `ad_orender.c` and the other integration commits
+  of the fork, and the build tooling here — are **GPL-2.0-or-later**. The
+  bundled Steinberg ASIO output driver (`ao_asio.c`, the fork's ASIO series)
+  keeps its **LGPL-2.1-or-later** header.
 - mpv's own license files (`Copyright`, `LICENSE.GPL`, `LICENSE.LGPL`) ship
   unchanged inside the built mpv tree.
 
@@ -249,9 +289,10 @@ runtime, which is **GPL-3.0-or-later**.
 liborender, so the combined work is licensed `GPL-3.0-or-later`** (the GPLv2+
 parts under their "or later" option). Full text: [`COPYING`](COPYING).
 
-**Corresponding source (GPLv3 §6):** each release ships from mpv `v0.41.0` (the
-pinned tag) plus this repository's `patches/`, and `liborender` built from
-Omniphony at the `OMNIPHONY_REF` printed in the release notes
+**Corresponding source (GPLv3 §6):** each release is built from the fork tag
+named in its notes (<https://github.com/mgth/mpv>), which is mpv `v0.41.0`
+plus the patch series attached to the release, and from `liborender` built
+from Omniphony at the `OMNIPHONY_REF` printed in the same notes
 (<https://github.com/mgth/Omniphony>).
 
 **Bundled third-party libraries** (ffmpeg, libplacebo, LuaJIT, …, plus the

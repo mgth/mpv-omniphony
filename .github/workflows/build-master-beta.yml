@@ -4,8 +4,9 @@ name: master-beta
 # spatial-audio patches, with native Dolby Vision Profile 7 FEL.
 #
 # As of 2026-07-01 FEL is UPSTREAM (mpv PR #17932 merged; libplacebo + ffmpeg
-# carry it in their masters), so there is no fork/patch to track — this build is
-# just "mpv master + orender". It still builds two deps from source because no
+# carry it in their masters), so there is no FEL fork/patch to track — this build
+# is just "mpv master + orender" (the fork's master tag, mpv-fork.env, merged
+# into mpv master HEAD). It still builds two deps from source because no
 # release ships the FEL API yet: libplacebo master (PL_API_VER >= 370) and ffmpeg
 # master (dovi_split BSF + DoVi stream group). See deps-fel/pins-fel.env and the
 # "Dolby Vision FEL" section of README.md. scripts/build-fel-deps.sh builds them
@@ -25,10 +26,11 @@ on:
     tags:
       - 'v*-fel*'
     paths:
-      - 'patches-master/**'
+      - 'mpv-fork.env'
       - 'deps-fel/**'
       - 'scripts/build-fel-deps.sh'
-      - 'scripts/apply-patches-master.sh'
+      - 'scripts/mpv-source.sh'
+      - 'scripts/fork-lib.sh'
       - '.github/workflows/build-master-beta.yml'
 
 env:
@@ -173,11 +175,24 @@ jobs:
           Cflags: -I\${includedir}
           EOF
 
-      - name: Apply orender patches onto mpv master
+      - name: mpv source (mpv master + the fork's master tag)
+        run: echo "MPV_DIR=$(bash scripts/mpv-source.sh master)" >> "$GITHUB_ENV"
+
+      # A tagged beta ships the engine of a release: the fork's vendored copy
+      # of its header must be that header. Rolling builds follow Omniphony's
+      # main and only report a difference.
+      - name: Check the vendored liborender header
         run: |
-          bash scripts/apply-patches-master.sh
-          src="$(ls -d build/mpv-master-* | grep -v 'mpv-master-clone$' | head -n1)"
-          echo "MPV_DIR=$src" >> "$GITHUB_ENV"
+          bash scripts/check-abi-header.sh "$MPV_DIR/common/orender_abi.h" \
+            omniphony/omniphony-renderer/orender_ffi/include/orender.h \
+            ${{ !startsWith(github.ref, 'refs/tags/') && '--warn' || '' }}
+
+      # The fork's delta as patches on the mpv master commit it is based on
+      # (MPV_MASTER_BASE in mpv-fork.env), attached to a tagged beta.
+      - name: Export the patch series (release asset)
+        run: |
+          bash scripts/export-patches.sh master patches-out
+          tar -czf mpv-omniphony-fel-patches.tar.gz -C patches-out asio orender
 
       - name: Build mpv (linked against FEL prefix)
         run: |
@@ -227,7 +242,9 @@ jobs:
       - uses: actions/upload-artifact@v6
         with:
           name: mpv-omniphony-fel-linux-x86_64
-          path: mpv-omniphony-fel-linux-x86_64.zip
+          path: |
+            mpv-omniphony-fel-linux-x86_64.zip
+            mpv-omniphony-fel-patches.tar.gz
 
   # macOS (Apple Silicon): native FEL build. Mirrors build-linux but builds the
   # FEL deps for arm64 (no NVIDIA; Vulkan via MoltenVK) and bundles every dylib
@@ -325,11 +342,8 @@ jobs:
           Cflags: -I\${includedir}
           EOF
 
-      - name: Apply orender patches onto mpv master
-        run: |
-          bash scripts/apply-patches-master.sh
-          src="$(ls -d build/mpv-master-* | grep -v 'mpv-master-clone$' | head -n1)"
-          echo "MPV_DIR=$src" >> "$GITHUB_ENV"
+      - name: mpv source (mpv master + the fork's master tag)
+        run: echo "MPV_DIR=$(bash scripts/mpv-source.sh master)" >> "$GITHUB_ENV"
 
       - name: Build mpv (linked against FEL prefix)
         run: |
@@ -684,11 +698,8 @@ jobs:
           Cflags: -I\${includedir}
           EOF
 
-      - name: Apply orender patches onto mpv master
-        run: |
-          bash scripts/apply-patches-master.sh
-          src="$(ls -d build/mpv-master-* | grep -v 'mpv-master-clone$' | head -n1)"
-          echo "MPV_DIR=$src" >> "$GITHUB_ENV"
+      - name: mpv source (mpv master + the fork's master tag)
+        run: echo "MPV_DIR=$(bash scripts/mpv-source.sh master)" >> "$GITHUB_ENV"
 
       # ao_asio needs the Steinberg ASIO SDK headers (GPLv3 half of its dual
       # licence). Exports ASIO_SDK_DIR, consumed by -Dasio-sdk below.
@@ -808,3 +819,4 @@ jobs:
             mpv-omniphony-fel-linux-x86_64.zip
             mpv-omniphony-fel-macos-arm64.zip
             mpv-omniphony-fel-windows-x86_64.zip
+            mpv-omniphony-fel-patches.tar.gz
