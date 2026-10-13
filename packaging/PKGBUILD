@@ -14,7 +14,7 @@
 
 pkgname=mpv-omniphony
 _tag=v0.7.0              # mpv-omniphony release tag
-_forktag=orender-v0.7.0  # mgth/mpv tag that release builds: MPV_FORK_STABLE_TAG of mpv-fork.env at $_tag
+_forktag=orender-v0.7.0.1  # mgth/mpv tag that release builds: MPV_FORK_STABLE_TAG of mpv-fork.env at $_tag
 _mpvver=0.41.0           # upstream mpv release the fork tag is based on (without the 'v')
 pkgver=0.7.0             # $_tag without the 'v' (hyphens, if any, become '.')
 pkgrel=1
