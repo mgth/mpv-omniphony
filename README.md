@@ -6,8 +6,8 @@ instead of letting FFmpeg downmix. **This repository holds the build, the
 packaging and the releases of the player only.**
 
 [![Download Omniphony Studio](https://img.shields.io/badge/Download-Omniphony-2ea44f?style=for-the-badge&logo=github)](https://github.com/mgth/Omniphony/releases/latest)
-[![Download mpv-omniphony](https://img.shields.io/badge/Download-mpv--omniphony-1f6feb?style=for-the-badge&logo=github)](https://github.com/mgth/Omniphony/releases/tag/mpv-v0.4.2)
-[![Download mpv-omniphony FEL](https://img.shields.io/badge/Download-mpv--omniphony%20FEL-8957e5?style=for-the-badge&logo=github)](https://github.com/mgth/Omniphony/releases/tag/mpv-v0.4.2-fel-beta.1)
+[![Download mpv-omniphony](https://img.shields.io/badge/Download-mpv--omniphony-1f6feb?style=for-the-badge&logo=github)](https://github.com/mgth/Omniphony/releases/tag/mpv-v0.7.0)
+[![Download mpv-omniphony FEL](https://img.shields.io/badge/Download-mpv--omniphony%20FEL-8957e5?style=for-the-badge&logo=github)](https://github.com/mgth/Omniphony/releases/tag/mpv-v0.7.0-fel-beta.1)
 
 > 📖 **Usage** (playback, Studio supervision, overlay controls) and **prebuilt
 > downloads** live with the engine:
@@ -56,6 +56,7 @@ scripts/build-appimage.sh    # package a built mpv + liborender as a Linux AppIm
 scripts/smoke-test-appimage.sh  # run that AppImage in a Fedora container (CI gate)
 meson-options.txt       # canonical `orender` meson feature option
 packaging/PKGBUILD          # Arch package of the stable track (provides/conflicts mpv)
+packaging/PKGBUILD-fel      # Arch package of the master track with Dolby Vision P7 FEL (pinned fork tag + libplacebo)
 packaging/PKGBUILD-master   # Arch -git package tracking mpv master HEAD
 packaging/libmpv-README.md  # shipped inside the Windows libmpv SDK zip
 .github/workflows/ci.yml             # stable build, loader tests, fork checks

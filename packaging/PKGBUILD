@@ -53,8 +53,8 @@ conflicts=('mpv')
 source=("mpv-$_forktag.tar.gz::https://github.com/mgth/mpv/archive/refs/tags/$_forktag.tar.gz"
         "mpv-omniphony-$_tag.tar.gz::https://github.com/mgth/mpv-omniphony/archive/refs/tags/$_tag.tar.gz")
 # Filled in by `updpkgsums` when the AUR package is bumped, once both tags exist.
-sha256sums=('SKIP'
-            'SKIP')
+sha256sums=('0c79ade96cc497fa6bc4230e134891ddadbbd856d8876848ff8ce9c66faafc83'
+            '7529a0afba63726307982410e7f5e79cdf73bf69b5d13aa9ee649992b178ad2b')
 
 _mpv="mpv-$_forktag"              # extracted fork tarball
 _repo="mpv-omniphony-${_tag#v}"   # extracted repo tarball (COPYING, notices)
